@@ -10,3 +10,6 @@ c63pred
 # data files
 *.yuv
 *.c63
+
+# Build folder
+*build/
