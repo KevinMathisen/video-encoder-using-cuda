@@ -11,10 +11,13 @@
 #include <math.h>
 #include <stdlib.h>
 
+#include <cuda_runtime.h>
+
 #include "me.h"
 #include "tables.h"
 
-static void sad_block_8x8(uint8_t *block1, uint8_t *block2, int stride, int *result)
+
+__device__ void sad_block_8x8(uint8_t *block1, uint8_t *block2, int stride, int *result)
 {
   int u, v;
 
@@ -24,17 +27,22 @@ static void sad_block_8x8(uint8_t *block1, uint8_t *block2, int stride, int *res
   {
     for (u = 0; u < 8; ++u)
     {
-      *result += abs(block2[v*stride+u] - block1[v*stride+u]);
+      *result += abs((int)(block2[v*stride+u] - block1[v*stride+u]));
     }
   }
 }
 
-/* Motion estimation for 8x8 block */
-static void me_block_8x8(struct c63_common *cm, int mb_x, int mb_y,
+
+__global__ void me_block_8x8_kernel(struct c63_common *cm, int mb_cols, int mb_rows,
     uint8_t *orig, uint8_t *ref, int color_component)
 {
+  int mb_x = blockIdx.x * blockDim.x + threadIdx.x;
+  int mb_y = blockIdx.y * blockDim.y + threadIdx.y;
+
+  if (mb_x >= mb_cols || mb_y >= mb_rows) return;
+
   struct macroblock *mb =
-    &cm->curframe->mbs[color_component][mb_y*cm->padw[color_component]/8+mb_x];
+    &cm->curframe->mbs[color_component][mb_y * cm->padw[color_component] / 8 + mb_x];
 
   int range = cm->me_search_range;
 
@@ -70,8 +78,6 @@ static void me_block_8x8(struct c63_common *cm, int mb_x, int mb_y,
       int sad;
       sad_block_8x8(orig + my*w+mx, ref + y*w+x, w, &sad);
 
-      /* printf("(%4d,%4d) - %d\n", x, y, sad); */
-
       if (sad < best_sad)
       {
         mb->mv_x = x - mx;
@@ -81,49 +87,74 @@ static void me_block_8x8(struct c63_common *cm, int mb_x, int mb_y,
     }
   }
 
-  /* Here, there should be a threshold on SAD that checks if the motion vector
-     is cheaper than intraprediction. We always assume MV to be beneficial */
-
-  /* printf("Using motion vector (%d, %d) with SAD %d\n", mb->mv_x, mb->mv_y,
-     best_sad); */
-
   mb->use_mv = 1;
 }
 
+
 void c63_motion_estimate(struct c63_common *cm)
 {
-  /* Compare this frame with previous reconstructed frame */
-  int mb_x, mb_y;
+  int mb_cols = cm->mb_cols;
+  int mb_rows = cm->mb_rows;
+
+  uint8_t *d_orig_Y, *d_recons_Y;
+  uint8_t *d_orig_U, *d_recons_U;
+  uint8_t *d_orig_V, *d_recons_V;
+
+  // Allocate memory on the GPU
+  cudaMalloc((void**)&d_orig_Y, cm->padw[Y_COMPONENT] * cm->padh[Y_COMPONENT] * sizeof(uint8_t));
+  cudaMalloc((void**)&d_recons_Y, cm->padw[Y_COMPONENT] * cm->padh[Y_COMPONENT] * sizeof(uint8_t));
+  cudaMalloc((void**)&d_orig_U, cm->padw[U_COMPONENT] * cm->padh[U_COMPONENT] * sizeof(uint8_t));
+  cudaMalloc((void**)&d_recons_U, cm->padw[U_COMPONENT] * cm->padh[U_COMPONENT] * sizeof(uint8_t));
+  cudaMalloc((void**)&d_orig_V, cm->padw[V_COMPONENT] * cm->padh[V_COMPONENT] * sizeof(uint8_t));
+  cudaMalloc((void**)&d_recons_V, cm->padw[V_COMPONENT] * cm->padh[V_COMPONENT] * sizeof(uint8_t));
+
+  // Copy data from host to device
+  cudaMemcpy(d_orig_Y, cm->curframe->orig->Y, cm->padw[Y_COMPONENT] * cm->padh[Y_COMPONENT] * sizeof(uint8_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_recons_Y, cm->refframe->recons->Y, cm->padw[Y_COMPONENT] * cm->padh[Y_COMPONENT] * sizeof(uint8_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_orig_U, cm->curframe->orig->U, cm->padw[U_COMPONENT] * cm->padh[U_COMPONENT] * sizeof(uint8_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_recons_U, cm->refframe->recons->U, cm->padw[U_COMPONENT] * cm->padh[U_COMPONENT] * sizeof(uint8_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_orig_V, cm->curframe->orig->V, cm->padw[V_COMPONENT] * cm->padh[V_COMPONENT] * sizeof(uint8_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_recons_V, cm->refframe->recons->V, cm->padw[V_COMPONENT] * cm->padh[V_COMPONENT] * sizeof(uint8_t), cudaMemcpyHostToDevice);
+
+  dim3 blockDim(16, 16);
+  dim3 gridDim((mb_cols + blockDim.x - 1) / blockDim.x, (mb_rows + blockDim.y - 1) / blockDim.y);
 
   /* Luma */
-  for (mb_y = 0; mb_y < cm->mb_rows; ++mb_y)
-  {
-    for (mb_x = 0; mb_x < cm->mb_cols; ++mb_x)
-    {
-      me_block_8x8(cm, mb_x, mb_y, cm->curframe->orig->Y,
-          cm->refframe->recons->Y, Y_COMPONENT);
-    }
-  }
+  me_block_8x8_kernel<<<gridDim, blockDim>>>(cm, mb_cols, mb_rows, d_orig_Y, d_recons_Y, Y_COMPONENT);
 
   /* Chroma */
-  for (mb_y = 0; mb_y < cm->mb_rows / 2; ++mb_y)
-  {
-    for (mb_x = 0; mb_x < cm->mb_cols / 2; ++mb_x)
-    {
-      me_block_8x8(cm, mb_x, mb_y, cm->curframe->orig->U,
-          cm->refframe->recons->U, U_COMPONENT);
-      me_block_8x8(cm, mb_x, mb_y, cm->curframe->orig->V,
-          cm->refframe->recons->V, V_COMPONENT);
-    }
-  }
+  mb_cols /= 2;
+  mb_rows /= 2;
+
+  me_block_8x8_kernel<<<gridDim, blockDim>>>(cm, mb_cols, mb_rows, d_orig_U, d_recons_U, U_COMPONENT);
+  me_block_8x8_kernel<<<gridDim, blockDim>>>(cm, mb_cols, mb_rows, d_orig_V, d_recons_V, V_COMPONENT);
+
+  cudaDeviceSynchronize();
+
+  // Free GPU memory
+  cudaFree(d_orig_Y);
+  cudaFree(d_recons_Y);
+  cudaFree(d_orig_U);
+  cudaFree(d_recons_U);
+  cudaFree(d_orig_V);
+  cudaFree(d_recons_V);
 }
 
-/* Motion compensation for 8x8 block */
-static void mc_block_8x8(struct c63_common *cm, int mb_x, int mb_y,
+
+
+
+
+/* CUDA kernel for motion compensation for 8x8 block */
+__global__ void mc_block_8x8_kernel(struct c63_common *cm, int mb_cols, int mb_rows,
     uint8_t *predicted, uint8_t *ref, int color_component)
 {
+  int mb_x = blockIdx.x * blockDim.x + threadIdx.x;
+  int mb_y = blockIdx.y * blockDim.y + threadIdx.y;
+
+  if (mb_x >= mb_cols || mb_y >= mb_rows) return;
+
   struct macroblock *mb =
-    &cm->curframe->mbs[color_component][mb_y*cm->padw[color_component]/8+mb_x];
+    &cm->curframe->mbs[color_component][mb_y * cm->padw[color_component] / 8 + mb_x];
 
   if (!mb->use_mv) { return; }
 
@@ -135,40 +166,36 @@ static void mc_block_8x8(struct c63_common *cm, int mb_x, int mb_y,
   int w = cm->padw[color_component];
 
   /* Copy block from ref mandated by MV */
-  int x, y;
-
+  int y, x;
   for (y = top; y < bottom; ++y)
   {
     for (x = left; x < right; ++x)
     {
-      predicted[y*w+x] = ref[(y + mb->mv_y) * w + (x + mb->mv_x)];
+      predicted[y * w + x] = ref[(y + mb->mv_y) * w + (x + mb->mv_x)];
     }
   }
 }
 
 void c63_motion_compensate(struct c63_common *cm)
 {
-  int mb_x, mb_y;
+  int mb_cols = cm->mb_cols;
+  int mb_rows = cm->mb_rows;
+
+  dim3 blockDim(16, 16);
+  dim3 gridDim((mb_cols + blockDim.x - 1) / blockDim.x, (mb_rows + blockDim.y - 1) / blockDim.y);
 
   /* Luma */
-  for (mb_y = 0; mb_y < cm->mb_rows; ++mb_y)
-  {
-    for (mb_x = 0; mb_x < cm->mb_cols; ++mb_x)
-    {
-      mc_block_8x8(cm, mb_x, mb_y, cm->curframe->predicted->Y,
-          cm->refframe->recons->Y, Y_COMPONENT);
-    }
-  }
+  mc_block_8x8_kernel<<<gridDim, blockDim>>>(cm, mb_cols, mb_rows,
+      cm->curframe->predicted->Y, cm->refframe->recons->Y, Y_COMPONENT);
 
   /* Chroma */
-  for (mb_y = 0; mb_y < cm->mb_rows / 2; ++mb_y)
-  {
-    for (mb_x = 0; mb_x < cm->mb_cols / 2; ++mb_x)
-    {
-      mc_block_8x8(cm, mb_x, mb_y, cm->curframe->predicted->U,
-          cm->refframe->recons->U, U_COMPONENT);
-      mc_block_8x8(cm, mb_x, mb_y, cm->curframe->predicted->V,
-          cm->refframe->recons->V, V_COMPONENT);
-    }
-  }
+  mb_cols /= 2;
+  mb_rows /= 2;
+
+  mc_block_8x8_kernel<<<gridDim, blockDim>>>(cm, mb_cols, mb_rows,
+      cm->curframe->predicted->U, cm->refframe->recons->U, U_COMPONENT);
+  mc_block_8x8_kernel<<<gridDim, blockDim>>>(cm, mb_cols, mb_rows,
+      cm->curframe->predicted->V, cm->refframe->recons->V, V_COMPONENT);
+
+  cudaDeviceSynchronize();
 }
