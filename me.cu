@@ -14,108 +14,114 @@
 #include "me.h"
 #include "tables.h"
 
-static void sad_block_8x8(uint8_t *block1, uint8_t *block2, int stride, int *result)
-{
-  int u, v;
+#include <cuda_runtime.h>
 
-  *result = 0;
-
-  for (v = 0; v < 8; ++v)
-  {
-    for (u = 0; u < 8; ++u)
-    {
-      *result += abs(block2[v*stride+u] - block1[v*stride+u]);
-    }
-  }
-}
-
-/* Motion estimation for 8x8 block */
-static void me_block_8x8(struct c63_common *cm, int mb_x, int mb_y,
-    uint8_t *orig, uint8_t *ref, int color_component)
-{
-  struct macroblock *mb =
-    &cm->curframe->mbs[color_component][mb_y*cm->padw[color_component]/8+mb_x];
-
-  int range = cm->me_search_range;
-
-  /* Quarter resolution for chroma channels. */
-  if (color_component > 0) { range /= 2; }
-
-  int left = mb_x * 8 - range;
-  int top = mb_y * 8 - range;
-  int right = mb_x * 8 + range;
-  int bottom = mb_y * 8 + range;
-
-  int w = cm->padw[color_component];
-  int h = cm->padh[color_component];
-
-  /* Make sure we are within bounds of reference frame. TODO: Support partial
-     frame bounds. */
-  if (left < 0) { left = 0; }
-  if (top < 0) { top = 0; }
-  if (right > (w - 8)) { right = w - 8; }
-  if (bottom > (h - 8)) { bottom = h - 8; }
-
-  int x, y;
-
-  int mx = mb_x * 8;
-  int my = mb_y * 8;
-
-  int best_sad = INT_MAX;
-
-  for (y = top; y < bottom; ++y)
-  {
-    for (x = left; x < right; ++x)
-    {
-      int sad;
-      sad_block_8x8(orig + my*w+mx, ref + y*w+x, w, &sad);
-
-      /* printf("(%4d,%4d) - %d\n", x, y, sad); */
-
-      if (sad < best_sad)
-      {
-        mb->mv_x = x - mx;
-        mb->mv_y = y - my;
-        best_sad = sad;
-      }
-    }
-  }
-
-  /* Here, there should be a threshold on SAD that checks if the motion vector
-     is cheaper than intraprediction. We always assume MV to be beneficial */
-
-  /* printf("Using motion vector (%d, %d) with SAD %d\n", mb->mv_x, mb->mv_y,
-     best_sad); */
-
-  mb->use_mv = 1;
-}
+extern __global__ void me_kernel(const uint8_t *d_orig, uint8_t *d_ref,
+struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows);
 
 void c63_motion_estimate(struct c63_common *cm)
 {
   /* Compare this frame with previous reconstructed frame */
-  int mb_x, mb_y;
+  
+  /* Motion estimation for Luma (Y) */
+  // Variables needed for Y
+  int w = cm->padw[Y_COMPONENT], h = cm->padh[Y_COMPONENT];
+  int cols = cm->mb_cols, rows = cm->mb_rows;
+  int range = cm->me_search_range;
 
-  /* Luma */
-  for (mb_y = 0; mb_y < cm->mb_rows; ++mb_y)
-  {
-    for (mb_x = 0; mb_x < cm->mb_cols; ++mb_x)
-    {
-      me_block_8x8(cm, mb_x, mb_y, cm->curframe->orig->Y,
-          cm->refframe->recons->Y, Y_COMPONENT);
-    }
-  }
+  uint8_t *d_orig_y = NULL;
+  uint8_t *d_ref_y  = NULL;
+  struct macroblock *d_mbs_y = NULL;
 
-  /* Chroma */
-  for (mb_y = 0; mb_y < cm->mb_rows / 2; ++mb_y)
-  {
-    for (mb_x = 0; mb_x < cm->mb_cols / 2; ++mb_x)
-    {
-      me_block_8x8(cm, mb_x, mb_y, cm->curframe->orig->U,
-          cm->refframe->recons->U, U_COMPONENT);
-      me_block_8x8(cm, mb_x, mb_y, cm->curframe->orig->V,
-          cm->refframe->recons->V, V_COMPONENT);
-    }
-  }
+  // Allocate and copy memory
+  cudaMalloc((void**)&d_orig_y, w*h*sizeof(uint8_t));
+  cudaMalloc((void**)&d_ref_y, w*h*sizeof(uint8_t));
+  cudaMalloc((void**)&d_mbs_y, cols*rows*sizeof(struct macroblock));
+
+  cudaMemcpy(d_orig_y, cm->curframe->orig->Y, w*h*sizeof(uint8_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_ref_y, cm->refframe->recons->Y, w*h*sizeof(uint8_t), cudaMemcpyHostToDevice);
+
+  // Launch kernel
+  dim3 grid(cols, rows, 1);
+  dim3 block(2*range, 2*range, 1);
+
+  me_kernel<<<grid, block>>>(d_orig_y, d_ref_y, d_mbs_y, 
+    range, w, h, cols, rows);
+  cudaDeviceSynchronize();
+
+  // Copy back results and free memory
+  cudaMemcpy(cm->curframe->mbs[Y_COMPONENT], d_mbs_y, cols*rows*sizeof(struct macroblock), cudaMemcpyDeviceToHost);
+
+  cudaFree(d_orig_y);
+  cudaFree(d_ref_y);
+  cudaFree(d_mbs_y);
+
+  /* Motion estimation for Chroma (U) */
+  // Variables needed for U
+  int w = cm->padw[U_COMPONENT], h = cm->padh[U_COMPONENT];
+  int cols = cm->mb_cols/2, rows = cm->mb_rows/2;
+  int range = cm->me_search_range/2;
+
+  uint8_t *d_orig_u = NULL;
+  uint8_t *d_ref_u  = NULL;
+  struct macroblock *d_mbs_u = NULL;
+
+  // Allocate and copy memory
+  cudaMalloc((void**)&d_orig_u, w*h*sizeof(uint8_t));
+  cudaMalloc((void**)&d_ref_u, w*h*sizeof(uint8_t));
+  cudaMalloc((void**)&d_mbs_u, cols*rows*sizeof(struct macroblock));
+
+  cudaMemcpy(d_orig_u, cm->curframe->orig->U, w*h*sizeof(uint8_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_ref_u, cm->refframe->recons->U, w*h*sizeof(uint8_t), cudaMemcpyHostToDevice);
+
+  // Launch kernel
+  dim3 grid(cols, rows, 1);
+  dim3 block(2*range, 2*range, 1);
+
+  me_kernel<<<grid, block>>>(d_orig_u, d_ref_u, d_mbs_u, 
+    range, w, h, cols, rows);
+  cudaDeviceSynchronize();
+
+  // Copy back results and free memory
+  cudaMemcpy(cm->curframe->mbs[U_COMPONENT], d_mbs_u, cols*rows*sizeof(struct macroblock), cudaMemcpyDeviceToHost);
+
+  cudaFree(d_orig_u);
+  cudaFree(d_ref_u);
+  cudaFree(d_mbs_u);
+
+  /* Motion estimation for Chroma (V) */
+  // Variables needed for V
+  int w = cm->padw[V_COMPONENT], h = cm->padh[V_COMPONENT];
+  int cols = cm->mb_cols/2, rows = cm->mb_rows/2;
+  int range = cm->me_search_range/2;
+
+  uint8_t *d_orig_v = NULL;
+  uint8_t *d_ref_v  = NULL;
+  struct macroblock *d_mbs_v = NULL;
+
+  // Allocate and copy memory
+  cudaMalloc((void**)&d_orig_v, w*h*sizeof(uint8_t));
+  cudaMalloc((void**)&d_ref_v, w*h*sizeof(uint8_t));
+  cudaMalloc((void**)&d_mbs_v, cols*rows*sizeof(struct macroblock));
+
+  cudaMemcpy(d_orig_v, cm->curframe->orig->V, w*h*sizeof(uint8_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_ref_v, cm->refframe->recons->V, w*h*sizeof(uint8_t), cudaMemcpyHostToDevice);
+
+  // Launch kernel
+  dim3 grid(cols, rows, 1);
+  dim3 block(2*range, 2*range, 1);
+
+  me_kernel<<<grid, block>>>(d_orig_v, d_ref_v, d_mbs_v, 
+    range, w, h, cols, rows);
+  cudaDeviceSynchronize();
+
+  // Copy back results and free memory
+  cudaMemcpy(cm->curframe->mbs[V_COMPONENT], d_mbs_v, cols*rows*sizeof(struct macroblock), cudaMemcpyDeviceToHost);
+
+  cudaFree(d_orig_v);
+  cudaFree(d_ref_v);
+  cudaFree(d_mbs_v);
+
 }
 
 /* Motion compensation for 8x8 block */
