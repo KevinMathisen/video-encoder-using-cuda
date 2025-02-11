@@ -62,7 +62,7 @@ add_library(c63
 	           tables.cu tables.h
 	           io.cu io.h
 	           common.cu common.h
-	           me.cu me.h)
+	           me.cu me.h me_kernel.cu)
 
 add_executable(c63enc
                c63enc.cu c63.h
