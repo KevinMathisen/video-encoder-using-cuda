@@ -39,8 +39,8 @@ __device__ int sad_block_8x8_device(const uint8_t *block1, uint8_t *block2, int 
  * @param range     Search range, i.e. how much to search in reference. Is halved for u and v
  * @param w         width of frame
  * @param h         height of frame
- * @param mb_rows   Number of rows
  * @param mb_cols   Number of columns
+ * @param mb_rows   Number of rows
  */
 __global__ void me_kernel(const uint8_t *d_orig, uint8_t *d_ref,
 struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
@@ -148,6 +148,7 @@ const struct macroblock *d_mbs, int w, int h, int mb_cols, int mb_rows)
 
     // Compute pixel coordinates in reference
     int ref_x = x + mb.mv_x, ref_y = y + mb.mv_y;
+    // Could check if reference is out of bounds, but should not be possible
 
     // Copy pixel to predicted frame
     d_out[y*w + x] = d_ref[ref_y*w + ref_x];
