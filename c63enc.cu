@@ -252,6 +252,9 @@ int main(int argc, char **argv)
   /* Encode input frames */
   int numframes = 0;
 
+  /* INIT GPU - Gentlemen, please start you multiprocessors */
+  gpu_init(cm);
+
   while (1)
   {
     image = read_yuv(infile, cm);
@@ -272,6 +275,9 @@ int main(int argc, char **argv)
 
     if (limit_numframes && numframes >= limit_numframes) { break; }
   }
+
+  /* Gentlemen, please clean up all memory used on the GPU */
+  gpu_cleanup();
 
   free_c63_enc(cm);
   fclose(outfile);
