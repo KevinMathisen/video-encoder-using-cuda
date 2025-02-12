@@ -30,6 +30,9 @@ uint8_t *d_out_Y, *d_out_U, *d_out_V;             // Pointer to output from GPU
 extern __global__ void me_kernel(const uint8_t *d_orig, uint8_t *d_ref,
 struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows);
 
+extern __global__ void mc_kernel(uint8_t *d_out, const uint8_t *d_ref,
+const struct macroblock *d_mbs, int w, int h, int mb_cols, int mb_rows);
+
 __host__ void gpu_init(struct c63_common *cm)
 {
   // Set the height and width of the frame components
@@ -82,6 +85,10 @@ __host__ void gpu_cleanup()
   cudaFree(d_in_ref_U);
   cudaFree(d_in_ref_V);
 
+  cudaFree(d_mbs_Y);
+  cudaFree(d_mbs_U);
+  cudaFree(d_mbs_V);
+
   cudaFree(d_out_Y);
   cudaFree(d_out_U);
   cudaFree(d_out_V);
@@ -122,64 +129,25 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
   me_kernel<<<block_grid_uv, thread_grid_uv>>>(d_in_org_V, d_in_ref_V, d_mbs_V, 
   range/2, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
-  // cudaDeviceSynchronize();
-
-  // Copy back results
-  cudaMemcpy(cm->curframe->mbs[V_COMPONENT], d_mbs_V, mem_size_mbs_uv, cudaMemcpyDeviceToHost);
-
-}
-
-/* Motion compensation for 8x8 block */
-static void mc_block_8x8(struct c63_common *cm, int mb_x, int mb_y,
-    uint8_t *predicted, uint8_t *ref, int color_component)
-{
-  struct macroblock *mb =
-    &cm->curframe->mbs[color_component][mb_y*cm->padw[color_component]/8+mb_x];
-
-  if (!mb->use_mv) { return; }
-
-  int left = mb_x * 8;
-  int top = mb_y * 8;
-  int right = left + 8;
-  int bottom = top + 8;
-
-  int w = cm->padw[color_component];
-
-  /* Copy block from ref mandated by MV */
-  int x, y;
-
-  for (y = top; y < bottom; ++y)
-  {
-    for (x = left; x < right; ++x)
-    {
-      predicted[y*w+x] = ref[(y + mb->mv_y) * w + (x + mb->mv_x)];
-    }
-  }
 }
 
 void c63_motion_compensate(struct c63_common *cm)
 {
-  int mb_x, mb_y;
+  dim3 block_grid_y(mb_cols_y, mb_rows_y);
+  dim3 block_grid_uv(mb_cols_uv, mb_rows_uv);
 
-  /* Luma */
-  for (mb_y = 0; mb_y < cm->mb_rows; ++mb_y)
-  {
-    for (mb_x = 0; mb_x < cm->mb_cols; ++mb_x)
-    {
-      mc_block_8x8(cm, mb_x, mb_y, cm->curframe->predicted->Y,
-          cm->refframe->recons->Y, Y_COMPONENT);
-    }
-  }
+  dim3 thread_grid(8, 8);
 
-  /* Chroma */
-  for (mb_y = 0; mb_y < cm->mb_rows / 2; ++mb_y)
-  {
-    for (mb_x = 0; mb_x < cm->mb_cols / 2; ++mb_x)
-    {
-      mc_block_8x8(cm, mb_x, mb_y, cm->curframe->predicted->U,
-          cm->refframe->recons->U, U_COMPONENT);
-      mc_block_8x8(cm, mb_x, mb_y, cm->curframe->predicted->V,
-          cm->refframe->recons->V, V_COMPONENT);
-    }
-  }
+  mc_kernel<<<block_grid_y, thread_grid>>>(d_out_Y, d_in_ref_Y, d_mbs_Y, 
+  w_y, h_y, mb_cols_y, mb_rows_y);
+
+  mc_kernel<<<block_grid_uv, thread_grid>>>(d_out_U, d_in_ref_U, d_mbs_U, 
+  w_uv, h_uv, mb_cols_uv, mb_rows_uv);
+
+  mc_kernel<<<block_grid_uv, thread_grid>>>(d_out_V, d_in_ref_V, d_mbs_V, 
+  w_uv, h_uv, mb_cols_uv, mb_rows_uv);
+
+  cudaMemcpy(cm->curframe->predicted->Y, d_out_Y, mem_size_y, cudaMemcpyDeviceToHost);
+  cudaMemcpy(cm->curframe->predicted->U, d_out_U, mem_size_uv, cudaMemcpyDeviceToHost);
+  cudaMemcpy(cm->curframe->predicted->V, d_out_V, mem_size_uv, cudaMemcpyDeviceToHost);
 }

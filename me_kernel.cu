@@ -112,3 +112,44 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
         mb->use_mv = 1; // always assume MV to be beneficial
     }
 }
+
+/**
+ * Kernel for doing motion compensation, using the offset found in ME for a block
+ * to copy a single pixel in the block from the reference to predicted (output)
+ * 
+ * @param d_out     Where we will place predicted
+ * @param d_ref     Reference we will copy from
+ * @param d_mbs     Block offsets
+ * @param w         Width of pixels
+ * @param h         Height of pixels
+ * @param mb_cols   Number of columns 
+ * @param mb_rows   Number of rows
+ */
+__global__ void mc_kernel(uint8_t *d_out, const uint8_t *d_ref,
+const struct macroblock *d_mbs, int w, int h, int mb_cols, int mb_rows)
+{
+    // Macroblock index from the grid
+    int mb_x = blockIdx.x, mb_y = blockIdx.y;
+
+    // Return if outside of valid blocks
+    if (mb_x >= mb_cols || mb_y >= mb_rows) return;
+
+    // Pixel coordinates in original frame
+    int x = mb_x*8 + threadIdx.x, y = mb_y*8 + threadIdx.y;
+
+    // Return if pixel out of bounds
+    if (x >= w || y >= h) return;
+
+    // Get macroblock offset
+    struct macroblock mb = d_mbs[mb_y*mb_cols + mb_x];
+
+    // check if we should use mv, although redundant
+    if (!mb.use_mv) return;
+
+    // Compute pixel coordinates in reference
+    int ref_x = x + mb.mv_x, ref_y = y + mb.mv_y;
+
+    // Copy pixel to predicted frame
+    d_out[y*w + x] = d_ref[ref_y*w + ref_x];
+
+}
