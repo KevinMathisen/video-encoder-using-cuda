@@ -101,6 +101,10 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
   // Copy data to device
   cudaMemcpy(d_in_org_Y, cm->curframe->orig->Y, mem_size_y, cudaMemcpyHostToDevice);
   cudaMemcpy(d_in_ref_Y, cm->refframe->recons->Y, mem_size_y, cudaMemcpyHostToDevice);
+  cudaMemcpy(d_in_org_U, cm->curframe->orig->U, mem_size_uv, cudaMemcpyHostToDevice);
+  cudaMemcpy(d_in_ref_U, cm->refframe->recons->U, mem_size_uv, cudaMemcpyHostToDevice);
+  cudaMemcpy(d_in_org_V, cm->curframe->orig->V, mem_size_uv, cudaMemcpyHostToDevice);
+  cudaMemcpy(d_in_ref_V, cm->refframe->recons->V, mem_size_uv, cudaMemcpyHostToDevice);
   
   // Set dimentions for grid and blocks
   dim3 block_grid_y(mb_cols_y, mb_rows_y, 1);
@@ -108,23 +112,13 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
 
   dim3 thread_grid_y(2*range, 2*range, 1);
   dim3 thread_grid_uv(range, range, 1);
-
+  
   /* Motion estimation for Luma (Y) */
   me_kernel<<<block_grid_y, thread_grid_y>>>(d_in_org_Y, d_in_ref_Y, d_mbs_Y, 
   range, w_y, h_y, mb_cols_y, mb_rows_y);
 
-  cudaMemcpy(cm->curframe->mbs[Y_COMPONENT], d_mbs_Y, mem_size_mbs_y, cudaMemcpyDeviceToHost);
-
-  cudaMemcpy(d_in_org_U, cm->curframe->orig->U, mem_size_uv, cudaMemcpyHostToDevice);
-  cudaMemcpy(d_in_ref_U, cm->refframe->recons->U, mem_size_uv, cudaMemcpyHostToDevice);
-
   me_kernel<<<block_grid_uv, thread_grid_uv>>>(d_in_org_U, d_in_ref_U, d_mbs_U, 
   range/2, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
-
-  cudaMemcpy(cm->curframe->mbs[U_COMPONENT], d_mbs_U, mem_size_mbs_uv, cudaMemcpyDeviceToHost);
-
-  cudaMemcpy(d_in_org_V, cm->curframe->orig->V, mem_size_uv, cudaMemcpyHostToDevice);
-  cudaMemcpy(d_in_ref_V, cm->refframe->recons->V, mem_size_uv, cudaMemcpyHostToDevice);
 
   me_kernel<<<block_grid_uv, thread_grid_uv>>>(d_in_org_V, d_in_ref_V, d_mbs_V, 
   range/2, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
