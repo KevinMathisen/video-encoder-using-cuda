@@ -27,6 +27,7 @@ void destroy_frame(struct frame *f)
   free(f->residuals->Vdct);
   free(f->residuals);
 
+  // Free pinned memory
   cudaFreeHost(f->predicted->Y);
   cudaFreeHost(f->predicted->U);
   cudaFreeHost(f->predicted->V);
@@ -51,6 +52,7 @@ struct frame* create_frame(struct c63_common *cm, yuv_t *image)
   cudaHostAlloc((void**)&(f->recons->U), cm->upw * cm->uph * sizeof(uint8_t), cudaHostAllocDefault);
   cudaHostAlloc((void**)&(f->recons->V), cm->vpw * cm->vph * sizeof(uint8_t), cudaHostAllocDefault);
 
+  // Use pinned memory for predicted, as this will be written to from the GPU
   f->predicted = (yuv_t*)malloc(sizeof(yuv_t));
   cudaHostAlloc((void**)&(f->predicted->Y), cm->ypw * cm->yph * sizeof(uint8_t), cudaHostAllocDefault);
   cudaHostAlloc((void**)&(f->predicted->U), cm->upw * cm->uph * sizeof(uint8_t), cudaHostAllocDefault);

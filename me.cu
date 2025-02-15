@@ -24,7 +24,7 @@ int range;
 
 uint8_t *d_in_org_Y, *d_in_org_U, *d_in_org_V;    // Pointer to org input on GPU
 uint8_t *d_in_ref_Y, *d_in_ref_U, *d_in_ref_V;    // Pointer to ref input on GPU
-struct macroblock *d_mbs_Y, *d_mbs_U, *d_mbs_V;         // Pointer to macroblocks on GPU
+struct macroblock *d_mbs_Y, *d_mbs_U, *d_mbs_V;   // Pointer to macroblocks on GPU
 uint8_t *d_out_Y, *d_out_U, *d_out_V;             // Pointer to output from GPU
 
 extern __global__ void me_kernel(const uint8_t *d_orig, uint8_t *d_ref,
@@ -57,8 +57,6 @@ __host__ void gpu_init(struct c63_common *cm)
 
   range = cm->me_search_range;
 
-  /* Maybe dont need to do this? */
-
   // Allocate memory for input
   cudaMalloc((void **) &d_in_org_Y, mem_size_y);
   cudaMalloc((void **) &d_in_org_U, mem_size_uv);
@@ -85,6 +83,7 @@ __host__ void gpu_init(struct c63_common *cm)
 
 __host__ void gpu_cleanup()
 {
+  // Free all memory used on the GPu
   cudaFree(d_in_org_Y);
   cudaFree(d_in_org_U);
   cudaFree(d_in_org_V);
@@ -101,6 +100,7 @@ __host__ void gpu_cleanup()
   cudaFree(d_out_U);
   cudaFree(d_out_V);
 
+  // Destroy streams
   for(int i = 0; i < 3; i++)
     cudaStreamDestroy(stream[i]);
 }
@@ -117,10 +117,12 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
   cudaMemcpyAsync(d_in_org_V, cm->curframe->orig->V, mem_size_uv, cudaMemcpyHostToDevice, stream[2]);
   cudaMemcpyAsync(d_in_ref_V, cm->refframe->recons->V, mem_size_uv, cudaMemcpyHostToDevice, stream[2]);
   
-  // Set dimentions for grid and blocks
+  /* Set dimentions for grid and blocks */
+  // Blocks correspond to macroblocks in frame
   dim3 block_grid_y(mb_cols_y, mb_rows_y, 1);
   dim3 block_grid_uv(mb_cols_uv, mb_rows_uv, 1);
 
+  // Threads correspond to each candidate reference
   dim3 thread_grid_y(2*range, 2*range, 1);
   dim3 thread_grid_uv(range, range, 1);
   
@@ -128,9 +130,11 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
   me_kernel<<<block_grid_y, thread_grid_y, 0, stream[0]>>>(
     d_in_org_Y, d_in_ref_Y, d_mbs_Y, range, w_y, h_y, mb_cols_y, mb_rows_y);
 
+  /* Motion estimation for Chroma (U) */
   me_kernel<<<block_grid_uv, thread_grid_uv, 0, stream[1]>>>(
     d_in_org_U, d_in_ref_U, d_mbs_U, range/2, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
+  /* Motion estimation for Chroma (V) */
   me_kernel<<<block_grid_uv, thread_grid_uv, 0, stream[2]>>>(
     d_in_org_V, d_in_ref_V, d_mbs_V, range/2, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
@@ -138,26 +142,35 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
 
 void c63_motion_compensate(struct c63_common *cm)
 {
+  /* Set dimentions for grid and blocks */
+  // Each block correspond to one macroblock
   dim3 block_grid_y(mb_cols_y, mb_rows_y);
   dim3 block_grid_uv(mb_cols_uv, mb_rows_uv);
 
+  // Each thread correspond to one pixel in each block
   dim3 thread_grid(8, 8);
 
+  /* Motion compensation for Luma (Y) */
   mc_kernel<<<block_grid_y, thread_grid, 0, stream[0]>>>(
     d_out_Y, d_in_ref_Y, d_mbs_Y, w_y, h_y, mb_cols_y, mb_rows_y);
 
+  // Copy results back to host
   cudaMemcpyAsync(cm->curframe->predicted->Y, d_out_Y, mem_size_y, cudaMemcpyDeviceToHost, stream[0]);
 
+  /* Motion estimation for Chroma (U) */
   mc_kernel<<<block_grid_uv, thread_grid, 0, stream[1]>>>(
     d_out_U, d_in_ref_U, d_mbs_U, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
+  // Copy results back to host
   cudaMemcpyAsync(cm->curframe->predicted->U, d_out_U, mem_size_uv, cudaMemcpyDeviceToHost, stream[1]);
 
+  /* Motion estimation for Chroma (V) */
   mc_kernel<<<block_grid_uv, thread_grid, 0, stream[2]>>>(
     d_out_V, d_in_ref_V, d_mbs_V, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
+  // Copy results back to host
   cudaMemcpyAsync(cm->curframe->predicted->V, d_out_V, mem_size_uv, cudaMemcpyDeviceToHost, stream[2]);
 
-  // Ensure all ME and MC is done
+  // Ensure predicted is copied back to host before continuing with DCT
   cudaDeviceSynchronize();
 }
