@@ -130,13 +130,22 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
   me_kernel<<<block_grid_y, thread_grid_y, 0, stream[0]>>>(
     d_in_org_Y, d_in_ref_Y, d_mbs_Y, range, w_y, h_y, mb_cols_y, mb_rows_y);
 
+  // Copy motion vectors back to host
+  cudaMemcpyAsync(cm->curframe->mbs[Y_COMPONENT], d_mbs_Y, mem_size_mbs_y, cudaMemcpyDeviceToHost, stream[0]);
+
   /* Motion estimation for Chroma (U) */
   me_kernel<<<block_grid_uv, thread_grid_uv, 0, stream[1]>>>(
     d_in_org_U, d_in_ref_U, d_mbs_U, range/2, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
+  // Copy motion vectors back to host
+  cudaMemcpyAsync(cm->curframe->mbs[U_COMPONENT], d_mbs_U, mem_size_mbs_uv, cudaMemcpyDeviceToHost, stream[1]);
+
   /* Motion estimation for Chroma (V) */
   me_kernel<<<block_grid_uv, thread_grid_uv, 0, stream[2]>>>(
     d_in_org_V, d_in_ref_V, d_mbs_V, range/2, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
+
+  // Copy motion vectors back to host
+  cudaMemcpyAsync(cm->curframe->mbs[V_COMPONENT], d_mbs_V, mem_size_mbs_uv, cudaMemcpyDeviceToHost, stream[2]);
 
 }
 

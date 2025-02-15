@@ -33,9 +33,10 @@ void destroy_frame(struct frame *f)
   cudaFreeHost(f->predicted->V);
   free(f->predicted);
 
-  free(f->mbs[Y_COMPONENT]);
-  free(f->mbs[U_COMPONENT]);
-  free(f->mbs[V_COMPONENT]);
+  // Free pinned memory
+  cudaFreeHost(f->mbs[Y_COMPONENT]);
+  cudaFreeHost(f->mbs[U_COMPONENT]);
+  cudaFreeHost(f->mbs[V_COMPONENT]);
 
   free(f);
 }
@@ -67,12 +68,10 @@ struct frame* create_frame(struct c63_common *cm, yuv_t *image)
   f->residuals->Udct = (int16_t*)calloc(cm->upw * cm->uph, sizeof(int16_t));
   f->residuals->Vdct = (int16_t*)calloc(cm->vpw * cm->vph, sizeof(int16_t));
 
-  f->mbs[Y_COMPONENT] =
-    (macroblock*)calloc(cm->mb_rows * cm->mb_cols, sizeof(struct macroblock));
-  f->mbs[U_COMPONENT] =
-    (macroblock*)calloc(cm->mb_rows/2 * cm->mb_cols/2, sizeof(struct macroblock));
-  f->mbs[V_COMPONENT] =
-    (macroblock*)calloc(cm->mb_rows/2 * cm->mb_cols/2, sizeof(struct macroblock));
+  // Use pinned memory for motion vectors, as this will be written to from the GPU
+  cudaHostAlloc((void**)&(f->mbs[Y_COMPONENT]), cm->mb_rows * cm->mb_cols * sizeof(struct macroblock), cudaHostAllocDefault);
+  cudaHostAlloc((void**)&(f->mbs[U_COMPONENT]), cm->mb_rows/2 * cm->mb_cols/2 * sizeof(struct macroblock), cudaHostAllocDefault);
+  cudaHostAlloc((void**)&(f->mbs[V_COMPONENT]), cm->mb_rows/2 * cm->mb_cols/2 * sizeof(struct macroblock), cudaHostAllocDefault);
 
   return f;
 }
