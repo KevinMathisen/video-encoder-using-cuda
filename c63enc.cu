@@ -47,19 +47,16 @@ static yuv_t* read_yuv(FILE *file, struct c63_common *cm)
 
   /* Read Y. The size of Y is the same as the size of the image. The indices
      represents the color component (0 is Y, 1 is U, and 2 is V) */
-  CUDA_CHECK(cudaHostAlloc((void**)&image->Y, 
-    cm->padw[Y_COMPONENT]*cm->padh[Y_COMPONENT] * sizeof(uint8_t), cudaHostAllocDefault));
+  image->Y = (uint8_t*)calloc(1, cm->padw[Y_COMPONENT]*cm->padh[Y_COMPONENT]);
   len += fread(image->Y, 1, width*height, file);
 
   /* Read U. Given 4:2:0 chroma sub-sampling, the size is 1/4 of Y
      because (height/2)*(width/2) = (height*width)/4. */
-  CUDA_CHECK(cudaHostAlloc((void**)&image->U, 
-    cm->padw[U_COMPONENT]*cm->padh[U_COMPONENT] * sizeof(uint8_t), cudaHostAllocDefault));
+  image->U = (uint8_t*)calloc(1, cm->padw[U_COMPONENT]*cm->padh[U_COMPONENT]);
   len += fread(image->U, 1, (width*height)/4, file);
 
   /* Read V. Given 4:2:0 chroma sub-sampling, the size is 1/4 of Y. */
-  CUDA_CHECK(cudaHostAlloc((void**)&image->V, 
-    cm->padw[V_COMPONENT]*cm->padh[V_COMPONENT] * sizeof(uint8_t), cudaHostAllocDefault));
+  image->V = (uint8_t*)calloc(1, cm->padw[V_COMPONENT]*cm->padh[V_COMPONENT]);
   len += fread(image->V, 1, (width*height)/4, file);
 
   if (ferror(file))
@@ -70,9 +67,9 @@ static yuv_t* read_yuv(FILE *file, struct c63_common *cm)
 
   if (feof(file))
   {
-    CUDA_CHECK(cudaFreeHost(image->Y));
-    CUDA_CHECK(cudaFreeHost(image->U));
-    CUDA_CHECK(cudaFreeHost(image->V));
+    free(image->Y);
+    free(image->U);
+    free(image->V);
     free(image);
 
     return NULL;
@@ -82,9 +79,9 @@ static yuv_t* read_yuv(FILE *file, struct c63_common *cm)
     fprintf(stderr, "Reached end of file, but incorrect bytes read.\n");
     fprintf(stderr, "Wrong input? (height: %d width: %d)\n", height, width);
 
-    CUDA_CHECK(cudaFreeHost(image->Y));
-    CUDA_CHECK(cudaFreeHost(image->U));
-    CUDA_CHECK(cudaFreeHost(image->V));
+    free(image->Y);
+    free(image->U);
+    free(image->V);
     free(image);
 
     return NULL;
@@ -279,9 +276,9 @@ int main(int argc, char **argv)
     printf("Encoding frame %d, ", numframes);
     c63_encode_image(cm, image);
 
-    CUDA_CHECK(cudaFreeHost(image->Y));
-    CUDA_CHECK(cudaFreeHost(image->U));
-    CUDA_CHECK(cudaFreeHost(image->V));
+    free(image->Y);
+    free(image->U);
+    free(image->V);
     free(image);
 
     printf("Done!\n");
