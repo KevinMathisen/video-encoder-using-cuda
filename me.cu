@@ -16,6 +16,16 @@
 
 #include <cuda_runtime.h>
 
+#define CUDA_CHECK(call)                                                    \
+  do {                                                                      \
+    cudaError_t err = call;                                                \
+    if (err != cudaSuccess) {                                              \
+      fprintf(stderr, "CUDA error %s:%d: %s\n",                             \
+              __FILE__, __LINE__, cudaGetErrorString(err));                \
+      exit(1);                                                             \
+    }                                                                      \
+  } while (0)
+
 extern __global__ void me_kernel(const uint8_t *d_orig, uint8_t *d_ref,
 struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows);
 
@@ -35,12 +45,12 @@ void c63_motion_estimate(struct c63_common *cm)
     struct macroblock *d_mbs_y = NULL;
 
     // Allocate and copy memory
-    cudaMalloc((void**)&d_orig_y, w*h*sizeof(uint8_t));
-    cudaMalloc((void**)&d_ref_y, w*h*sizeof(uint8_t));
-    cudaMalloc((void**)&d_mbs_y, cols*rows*sizeof(struct macroblock));
+    CUDA_CHECK(cudaMalloc((void**)&d_orig_y, w*h*sizeof(uint8_t)));
+    CUDA_CHECK(cudaMalloc((void**)&d_ref_y, w*h*sizeof(uint8_t)));
+    CUDA_CHECK(cudaMalloc((void**)&d_mbs_y, cols*rows*sizeof(struct macroblock)));
 
-    cudaMemcpy(d_orig_y, cm->curframe->orig->Y, w*h*sizeof(uint8_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_ref_y, cm->refframe->recons->Y, w*h*sizeof(uint8_t), cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMemcpy(d_orig_y, cm->curframe->orig->Y, w*h*sizeof(uint8_t), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_ref_y, cm->refframe->recons->Y, w*h*sizeof(uint8_t), cudaMemcpyHostToDevice));
 
     // Launch kernel
     dim3 grid(cols, rows, 1);
@@ -48,14 +58,14 @@ void c63_motion_estimate(struct c63_common *cm)
 
     me_kernel<<<grid, block>>>(d_orig_y, d_ref_y, d_mbs_y, 
       range, w, h, cols, rows);
-    cudaDeviceSynchronize();
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     // Copy back results and free memory
-    cudaMemcpy(cm->curframe->mbs[Y_COMPONENT], d_mbs_y, cols*rows*sizeof(struct macroblock), cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(cm->curframe->mbs[Y_COMPONENT], d_mbs_y, cols*rows*sizeof(struct macroblock), cudaMemcpyDeviceToHost));
 
-    cudaFree(d_orig_y);
-    cudaFree(d_ref_y);
-    cudaFree(d_mbs_y);
+    CUDA_CHECK(cudaFree(d_orig_y));
+    CUDA_CHECK(cudaFree(d_ref_y));
+    CUDA_CHECK(cudaFree(d_mbs_y));
   }
 
   /* Motion estimation for Chroma (U) */
