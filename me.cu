@@ -56,23 +56,23 @@ __host__ void gpu_init(struct c63_common *cm)
   range = cm->me_search_range;
 
   // Allocate memory for input
-  cudaMalloc((void **) &d_in_org_Y, mem_size_y);
-  cudaMalloc((void **) &d_in_org_U, mem_size_uv);
-  cudaMalloc((void **) &d_in_org_V, mem_size_uv);
+  cudaMallocManaged((void **) &d_in_org_Y, mem_size_y);
+  cudaMallocManaged((void **) &d_in_org_U, mem_size_uv);
+  cudaMallocManaged((void **) &d_in_org_V, mem_size_uv);
 
-  cudaMalloc((void **) &d_in_ref_Y, mem_size_y);
-  cudaMalloc((void **) &d_in_ref_U, mem_size_uv);
-  cudaMalloc((void **) &d_in_ref_V, mem_size_uv);
+  cudaMallocManaged((void **) &d_in_ref_Y, mem_size_y);
+  cudaMallocManaged((void **) &d_in_ref_U, mem_size_uv);
+  cudaMallocManaged((void **) &d_in_ref_V, mem_size_uv);
 
   // Allocate memory for macroblock offsets
-  cudaMalloc((void**) &d_mbs_Y, mem_size_mbs_y);
-  cudaMalloc((void**) &d_mbs_U, mem_size_mbs_uv);
-  cudaMalloc((void**) &d_mbs_V, mem_size_mbs_uv);
+  cudaMallocManaged((void**) &d_mbs_Y, mem_size_mbs_y);
+  cudaMallocManaged((void**) &d_mbs_U, mem_size_mbs_uv);
+  cudaMallocManaged((void**) &d_mbs_V, mem_size_mbs_uv);
 
   // Allocate memory for output
-  cudaMalloc((void**) &d_out_Y, mem_size_y);
-  cudaMalloc((void**) &d_out_U, mem_size_uv);
-  cudaMalloc((void**) &d_out_V, mem_size_uv);
+  cudaMallocManaged((void**) &d_out_Y, mem_size_y);
+  cudaMallocManaged((void**) &d_out_U, mem_size_uv);
+  cudaMallocManaged((void**) &d_out_V, mem_size_uv);
 }
 
 __host__ void gpu_cleanup()
