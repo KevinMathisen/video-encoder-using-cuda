@@ -38,15 +38,15 @@ void destroy_frame(struct frame *f)
   free(f->residuals);
 
   // Free pinned memory
-  CUDA_CHECK(cudaFreeHost(f->predicted->Y));
-  CUDA_CHECK(cudaFreeHost(f->predicted->U));
-  CUDA_CHECK(cudaFreeHost(f->predicted->V));
+  free(f->predicted->Y);
+  free(f->predicted->U);
+  free(f->predicted->V);
   free(f->predicted);
 
   // Free pinned memory
-  free(f->mbs[Y_COMPONENT]);
-  free(f->mbs[U_COMPONENT]);
-  free(f->mbs[V_COMPONENT]);
+  CUDA_CHECK(cudaFreeHost(f->mbs[Y_COMPONENT]));
+  CUDA_CHECK(cudaFreeHost(f->mbs[U_COMPONENT]));
+  CUDA_CHECK(cudaFreeHost(f->mbs[V_COMPONENT]));
 
   free(f);
 }
@@ -65,9 +65,9 @@ struct frame* create_frame(struct c63_common *cm, yuv_t *image)
 
   // Use pinned memory for predicted, as this will be written to from the GPU
   f->predicted = (yuv_t*)malloc(sizeof(yuv_t));
-  CUDA_CHECK(cudaHostAlloc((void**)&(f->predicted->Y), cm->ypw * cm->yph * sizeof(uint8_t), cudaHostAllocDefault));
-  CUDA_CHECK(cudaHostAlloc((void**)&(f->predicted->U), cm->upw * cm->uph * sizeof(uint8_t), cudaHostAllocDefault));
-  CUDA_CHECK(cudaHostAlloc((void**)&(f->predicted->V), cm->vpw * cm->vph * sizeof(uint8_t), cudaHostAllocDefault));
+  f->predicted->Y = (uint8_t*)calloc(cm->ypw * cm->yph, sizeof(uint8_t));
+  f->predicted->U = (uint8_t*)calloc(cm->upw * cm->uph, sizeof(uint8_t));
+  f->predicted->V = (uint8_t*)calloc(cm->vpw * cm->vph, sizeof(uint8_t));
 
   f->residuals = (dct_t*)malloc(sizeof(dct_t));
   f->residuals->Ydct = (int16_t*)calloc(cm->ypw * cm->yph, sizeof(int16_t));
@@ -75,12 +75,9 @@ struct frame* create_frame(struct c63_common *cm, yuv_t *image)
   f->residuals->Vdct = (int16_t*)calloc(cm->vpw * cm->vph, sizeof(int16_t));
 
   // Use pinned memory for motion vectors, as this will be written to from the GPU
-  f->mbs[Y_COMPONENT] =
-    (macroblock*)calloc(cm->mb_rows * cm->mb_cols, sizeof(struct macroblock));
-  f->mbs[U_COMPONENT] =
-    (macroblock*)calloc(cm->mb_rows/2 * cm->mb_cols/2, sizeof(struct macroblock));
-  f->mbs[V_COMPONENT] =
-    (macroblock*)calloc(cm->mb_rows/2 * cm->mb_cols/2, sizeof(struct macroblock));
+  CUDA_CHECK(cudaHostAlloc((void**)&(f->mbs[Y_COMPONENT]), cm->mb_rows * cm->mb_cols * sizeof(struct macroblock), cudaHostAllocDefault));
+  CUDA_CHECK(cudaHostAlloc((void**)&(f->mbs[U_COMPONENT]), cm->mb_rows/2 * cm->mb_cols/2 * sizeof(struct macroblock), cudaHostAllocDefault));
+  CUDA_CHECK(cudaHostAlloc((void**)&(f->mbs[V_COMPONENT]), cm->mb_rows/2 * cm->mb_cols/2 * sizeof(struct macroblock), cudaHostAllocDefault));
 
   return f;
 }
