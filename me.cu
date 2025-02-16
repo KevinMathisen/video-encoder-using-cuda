@@ -123,6 +123,15 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
   me_kernel<<<block_grid_uv, thread_grid_uv>>>(d_in_org_V, d_in_ref_V, d_mbs_V, 
   range/2, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
+  cudaMemcpy(cm->curframe->mbs[Y_COMPONENT], d_mbs_Y, mem_size_mbs_y, cudaMemcpyDeviceToHost);
+  cudaMemcpy(cm->curframe->mbs[U_COMPONENT], d_mbs_U, mem_size_mbs_uv, cudaMemcpyDeviceToHost);
+  cudaMemcpy(cm->curframe->mbs[V_COMPONENT], d_mbs_V, mem_size_mbs_uv, cudaMemcpyDeviceToHost);
+
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    fprintf(stderr, "Kernel launch error: %s\n", cudaGetErrorString(err));
+    exit(1);
+  }
 }
 
 void c63_motion_compensate(struct c63_common *cm)
@@ -144,4 +153,10 @@ void c63_motion_compensate(struct c63_common *cm)
   cudaMemcpy(cm->curframe->predicted->Y, d_out_Y, mem_size_y, cudaMemcpyDeviceToHost);
   cudaMemcpy(cm->curframe->predicted->U, d_out_U, mem_size_uv, cudaMemcpyDeviceToHost);
   cudaMemcpy(cm->curframe->predicted->V, d_out_V, mem_size_uv, cudaMemcpyDeviceToHost);
+
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    fprintf(stderr, "Kernel launch error: %s\n", cudaGetErrorString(err));
+    exit(1);
+  }
 }
