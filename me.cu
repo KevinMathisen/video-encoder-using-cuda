@@ -58,6 +58,12 @@ void c63_motion_estimate(struct c63_common *cm)
 
     me_kernel<<<grid, block>>>(d_orig_y, d_ref_y, d_mbs_y, 
       range, w, h, cols, rows);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+      fprintf(stderr, "Kernel run error: %s\n", cudaGetErrorString(err));
+      exit(1);
+    }
+
     CUDA_CHECK(cudaDeviceSynchronize());
 
     // Copy back results and free memory
