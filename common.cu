@@ -69,10 +69,6 @@ struct frame* create_frame(struct c63_common *cm, yuv_t *image)
   CUDA_CHECK(cudaHostAlloc((void**)&(f->predicted->U), cm->upw * cm->uph * sizeof(uint8_t), cudaHostAllocDefault));
   CUDA_CHECK(cudaHostAlloc((void**)&(f->predicted->V), cm->vpw * cm->vph * sizeof(uint8_t), cudaHostAllocDefault));
 
-  f->predicted->Y = (uint8_t*)calloc(cm->ypw * cm->yph, sizeof(uint8_t));
-  f->predicted->U = (uint8_t*)calloc(cm->upw * cm->uph, sizeof(uint8_t));
-  f->predicted->V = (uint8_t*)calloc(cm->vpw * cm->vph, sizeof(uint8_t));
-
   f->residuals = (dct_t*)malloc(sizeof(dct_t));
   f->residuals->Ydct = (int16_t*)calloc(cm->ypw * cm->yph, sizeof(int16_t));
   f->residuals->Udct = (int16_t*)calloc(cm->upw * cm->uph, sizeof(int16_t));
