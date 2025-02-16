@@ -153,7 +153,7 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
   me_kernel<<<block_grid_uv, thread_grid_uv, 0, stream[1]>>>(
     d_in_org_U, d_in_ref_U, d_mbs_U, range/2, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
-  cudaError_t err = cudaGetLastError();
+  err = cudaGetLastError();
   if (err != cudaSuccess) {
     fprintf(stderr, "Kernel launch error: %s\n", cudaGetErrorString(err));
     exit(1);
@@ -166,7 +166,7 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
   me_kernel<<<block_grid_uv, thread_grid_uv, 0, stream[2]>>>(
     d_in_org_V, d_in_ref_V, d_mbs_V, range/2, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
-  cudaError_t err = cudaGetLastError();
+  err = cudaGetLastError();
   if (err != cudaSuccess) {
     fprintf(stderr, "Kernel launch error: %s\n", cudaGetErrorString(err));
     exit(1);
@@ -204,7 +204,7 @@ void c63_motion_compensate(struct c63_common *cm)
   mc_kernel<<<block_grid_uv, thread_grid, 0, stream[1]>>>(
     d_out_U, d_in_ref_U, d_mbs_U, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
-  cudaError_t err = cudaGetLastError();
+  err = cudaGetLastError();
   if (err != cudaSuccess) {
     fprintf(stderr, "Kernel launch error: %s\n", cudaGetErrorString(err));
     exit(1);
@@ -217,7 +217,7 @@ void c63_motion_compensate(struct c63_common *cm)
   mc_kernel<<<block_grid_uv, thread_grid, 0, stream[2]>>>(
     d_out_V, d_in_ref_V, d_mbs_V, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
-  cudaError_t err = cudaGetLastError();
+  err = cudaGetLastError();
   if (err != cudaSuccess) {
     fprintf(stderr, "Kernel launch error: %s\n", cudaGetErrorString(err));
     exit(1);
