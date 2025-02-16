@@ -107,6 +107,11 @@ static void c63_encode_image(struct c63_common *cm, yuv_t *image)
     cm->frames_since_keyframe = 0;
 
     fprintf(stderr, " (keyframe) ");
+
+    // Apparantly memory is not zeroed when using cudaHostAlloc, so manually set it for keyframes
+    memset(cm->curframe->predicted->Y, 0, cm->ypw * cm->yph);
+    memset(cm->curframe->predicted->U, 0, cm->upw * cm->uph);
+    memset(cm->curframe->predicted->V, 0, cm->vpw * cm->vph);
   }
   else { cm->curframe->keyframe = 0; }
 

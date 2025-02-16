@@ -38,9 +38,9 @@ void destroy_frame(struct frame *f)
   free(f->residuals);
 
   // Free pinned memory
-  free(f->predicted->Y);
-  free(f->predicted->U);
-  free(f->predicted->V);
+  CUDA_CHECK(cudaFreeHost(f->predicted->Y));
+  CUDA_CHECK(cudaFreeHost(f->predicted->U));
+  CUDA_CHECK(cudaFreeHost(f->predicted->V));
   free(f->predicted);
 
   // Free pinned memory
@@ -65,9 +65,9 @@ struct frame* create_frame(struct c63_common *cm, yuv_t *image)
 
   // Use pinned memory for predicted, as this will be written to from the GPU
   f->predicted = (yuv_t*)malloc(sizeof(yuv_t));
-  f->predicted->Y = (uint8_t*)calloc(cm->ypw * cm->yph, sizeof(uint8_t));
-  f->predicted->U = (uint8_t*)calloc(cm->upw * cm->uph, sizeof(uint8_t));
-  f->predicted->V = (uint8_t*)calloc(cm->vpw * cm->vph, sizeof(uint8_t));
+  CUDA_CHECK(cudaHostAlloc((void**)&(f->predicted->Y), cm->ypw * cm->yph * sizeof(uint8_t), cudaHostAllocDefault));
+  CUDA_CHECK(cudaHostAlloc((void**)&(f->predicted->U), cm->upw * cm->uph * sizeof(uint8_t), cudaHostAllocDefault));
+  CUDA_CHECK(cudaHostAlloc((void**)&(f->predicted->V), cm->vpw * cm->vph * sizeof(uint8_t), cudaHostAllocDefault));
 
   f->residuals = (dct_t*)malloc(sizeof(dct_t));
   f->residuals->Ydct = (int16_t*)calloc(cm->ypw * cm->yph, sizeof(int16_t));
