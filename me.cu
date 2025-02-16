@@ -142,7 +142,7 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
 
   cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
-    fprintf(stderr, "Kernel launch error: %s\n", cudaGetErrorString(err));
+    fprintf(stderr, "Kernel 1 launch error: %s\n", cudaGetErrorString(err));
     exit(1);
   }
 
@@ -155,7 +155,7 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
 
   err = cudaGetLastError();
   if (err != cudaSuccess) {
-    fprintf(stderr, "Kernel launch error: %s\n", cudaGetErrorString(err));
+    fprintf(stderr, "Kernel 2 launch error: %s\n", cudaGetErrorString(err));
     exit(1);
   }
 
@@ -168,7 +168,7 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
 
   err = cudaGetLastError();
   if (err != cudaSuccess) {
-    fprintf(stderr, "Kernel launch error: %s\n", cudaGetErrorString(err));
+    fprintf(stderr, "Kernel 3 launch error: %s\n", cudaGetErrorString(err));
     exit(1);
   }
 
@@ -193,7 +193,7 @@ void c63_motion_compensate(struct c63_common *cm)
 
   cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
-    fprintf(stderr, "Kernel launch error: %s\n", cudaGetErrorString(err));
+    fprintf(stderr, "Kernel 4 launch error: %s\n", cudaGetErrorString(err));
     exit(1);
   }
 
@@ -206,7 +206,7 @@ void c63_motion_compensate(struct c63_common *cm)
 
   err = cudaGetLastError();
   if (err != cudaSuccess) {
-    fprintf(stderr, "Kernel launch error: %s\n", cudaGetErrorString(err));
+    fprintf(stderr, "Kernel 5 launch error: %s\n", cudaGetErrorString(err));
     exit(1);
   }
 
@@ -219,7 +219,7 @@ void c63_motion_compensate(struct c63_common *cm)
 
   err = cudaGetLastError();
   if (err != cudaSuccess) {
-    fprintf(stderr, "Kernel launch error: %s\n", cudaGetErrorString(err));
+    fprintf(stderr, "Kernel 6 launch error: %s\n", cudaGetErrorString(err));
     exit(1);
   }
 
