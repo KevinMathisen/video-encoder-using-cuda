@@ -5,152 +5,157 @@
 #include "c63.h"
 
 /**
- * Function for calculating sum of absolute difference between 
- * a block in orgin frame and a block in ref frame
- * 
- * @param orig      Pointer to top left corner of 8x8 block in orig
- * @param ref       Pointer to top left corner of 8x8 block in ref
- * @param stride    Width of frame, used for indexing
- * 
- * @return          Sum of absolute difference between blocks
+ * Compute the sum of absolute differences (SAD) for an 8x8 block
+ * using texture fetches from the original and reference frames.
+ *
+ * @param tex_orig   Texture object for the original frame.
+ * @param tex_ref    Texture object for the reference frame.
+ * @param orig_x     X-coordinate of the top-left corner of the block in the original frame.
+ * @param orig_y     Y-coordinate of the top-left corner of the block in the original frame.
+ * @param ref_x      X-coordinate of the top-left corner of the block in the reference frame.
+ * @param ref_y      Y-coordinate of the top-left corner of the block in the reference frame.
+ *
+ * @return           Sum of absolute differences over the 8x8 block.
  */
-__device__ int sad_block_8x8_device(const uint8_t *block1, uint8_t *block2, int stride)
+__device__ int sad_block_8x8_tex_device(cudaTextureObject_t tex_orig, cudaTextureObject_t tex_ref,
+                                          int orig_x, int orig_y, int ref_x, int ref_y)
 {
     int u, v;
     int result = 0;
-
     for (v = 0; v < 8; ++v)
     {
         for (u = 0; u < 8; ++u)
         {
-            result += abs(block2[v*stride+u] - block1[v*stride+u]);
+            // Fetch pixels using texture fetches.
+            uint8_t orig_pixel = tex2D<uint8_t>(tex_orig, orig_x + u, orig_y + v);
+            uint8_t ref_pixel  = tex2D<uint8_t>(tex_ref, ref_x + u, ref_y + v);
+            result += abs((int)ref_pixel - (int)orig_pixel);
         }
     }
     return result;
 }
 
 /**
- * Kernel for doing motion estimation on a given macroblock, and finding the
- * offset with the smallest sad to use in the encoding. 
- * 
- * @param d_orig    Frame we are encoding
- * @param d_ref     Frame we are using as reference for finding residuals
- * @param d_mbs     Where we store offset for each macroblock
- * @param range     Search range, i.e. how much to search in reference. Is halved for u and v
- * @param w         width of frame
- * @param h         height of frame
- * @param mb_cols   Number of columns
- * @param mb_rows   Number of rows
+ * Kernel for performing motion estimation on macroblocks.
+ *
+ * @param tex_orig   Texture object for the original frame.
+ * @param tex_ref    Texture object for the reference frame.
+ * @param d_mbs      Output macroblock data (motion vectors).
+ * @param range      Search range.
+ * @param w          Width of the frame.
+ * @param h          Height of the frame.
+ * @param mb_cols    Number of macroblock columns.
+ * @param mb_rows    Number of macroblock rows.
  */
-__global__ void me_kernel(const uint8_t *d_orig, uint8_t *d_ref,
-struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
+__global__ void me_kernel(cudaTextureObject_t tex_orig, cudaTextureObject_t tex_ref,
+                            struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
 {
-    // Macroblock index from the grid
-    int mb_x = blockIdx.x, mb_y = blockIdx.y;
+    // Macroblock indices.
+    int mb_x = blockIdx.x;
+    int mb_y = blockIdx.y;
 
-    // Return if outside of valid blocks
-    if (mb_x >= mb_cols || mb_y >= mb_rows) return;
+    // Return if this macroblock is outside the valid range.
+    if (mb_x >= mb_cols || mb_y >= mb_rows)
+        return;
 
-    // Calculate left top corner for search area in reference frame
-    int search_left = mb_x*8-range, search_top = mb_y*8-range;
+    // Determine the top-left corner of the search area in the reference frame.
+    int search_left = mb_x * 8 - range;
+    int search_top  = mb_y * 8 - range;
 
-    // Calculate where the thread should then start, 
-    // i.e. use the thread index to calculcate where in the search area it is
-    int x = search_left + threadIdx.x, y = search_top + threadIdx.y;
+    // Determine the candidate position within the search area using the thread indices.
+    int x = search_left + threadIdx.x;
+    int y = search_top + threadIdx.y;
 
-    // Find where orig block starts
-    int mx = mb_x * 8, my = mb_y * 8;
+    // Coordinates for the original block.
+    int mx = mb_x * 8;
+    int my = mb_y * 8;
 
     int sad_value = INT_MAX;
-
-    // If we are within bounds of reference frame 
-    // (Does not support partial frame bounds) 
-    if (x >= 0 && x <= w-8 && y >= 0 && y <= h-8) 
+    // Only compute SAD if the candidate block is within the frame bounds.
+    if (x >= 0 && x <= w - 8 && y >= 0 && y <= h - 8)
     {
-        sad_value = sad_block_8x8_device(d_orig + my*w+mx, d_ref+y*w+x, w);
+        sad_value = sad_block_8x8_tex_device(tex_orig, tex_ref, mx, my, x, y);
     }
 
-    // Next we need to find the lowest sad_value and its offset
-    // Store (sad, mv_x, mv_y) in shared memory for each thread
-
-    // Shared memory for storing sad, mv_x, and my_y:
+    // Allocate shared memory for SAD and corresponding motion vector components.
     __shared__ int s_sad[1024];
     __shared__ int s_mv_x[1024];
     __shared__ int s_mv_y[1024];
 
-    // Get the thread index used to access shared memory
-    int tid = threadIdx.y*blockDim.x + threadIdx.x;
+    // Flatten the thread index.
+    int tid = threadIdx.y * blockDim.x + threadIdx.x;
 
     s_sad[tid] = sad_value;
-    s_mv_x[tid] = x-mx;
-    s_mv_y[tid] = y-my;
+    s_mv_x[tid] = x - mx;
+    s_mv_y[tid] = y - my;
 
-    __syncthreads(); // Ensure all thread values are in shared memory before reduce
+    __syncthreads();
 
-    // Use reduction to find the minimum sad
-    // Start with half of the blocks, then 1/4, 1/8, etc until we only have one left
-    for (int stride = blockDim.x*blockDim.y / 2; stride > 0; stride >>= 1)
+    // Reduce across the threads to find the minimum SAD value.
+    for (int stride = blockDim.x * blockDim.y / 2; stride > 0; stride >>= 1)
     {
-        if (tid < stride) // only use threads before stride
+        if (tid < stride)
         {
-            if (s_sad[tid + stride] < s_sad[tid]) // Check if we should move data to left
+            if (s_sad[tid + stride] < s_sad[tid])
             {
-                s_sad[tid] = s_sad[tid+stride];
-                s_mv_x[tid] = s_mv_x[tid+stride];
-                s_mv_y[tid] = s_mv_y[tid+stride];
+                s_sad[tid] = s_sad[tid + stride];
+                s_mv_x[tid] = s_mv_x[tid + stride];
+                s_mv_y[tid] = s_mv_y[tid + stride];
             }
         }
-        __syncthreads(); // Ensure all threads have copied if needed
+        __syncthreads();
     }
 
-    // thread 0 has the smallest sad, return its offset
+    // The first thread writes the best motion vector for this macroblock.
     if (tid == 0)
     {
-        struct macroblock *mb = &d_mbs[mb_y*mb_cols + mb_x];
+        struct macroblock *mb = &d_mbs[mb_y * mb_cols + mb_x];
         mb->mv_x = s_mv_x[0];
         mb->mv_y = s_mv_y[0];
-        mb->use_mv = 1; // always assume MV to be beneficial
+        mb->use_mv = 1; // Assume the motion vector is always beneficial.
     }
 }
 
 /**
- * Kernel for doing motion compensation, using the offset found in ME for a block
- * to copy a single pixel in the block from the reference to predicted (output)
- * 
- * @param d_out     Where we will place predicted
- * @param d_ref     Reference we will copy from
- * @param d_mbs     Block offsets
- * @param w         Width of pixels
- * @param h         Height of pixels
- * @param mb_cols   Number of columns 
- * @param mb_rows   Number of rows
+ * Kernel for performing motion compensation using the motion vectors.
+ *
+ * @param d_out     Output predicted frame buffer.
+ * @param tex_ref   Texture object for the reference frame.
+ * @param d_mbs     Macroblock motion vector data.
+ * @param w         Width of the frame.
+ * @param h         Height of the frame.
+ * @param mb_cols   Number of macroblock columns.
+ * @param mb_rows   Number of macroblock rows.
  */
-__global__ void mc_kernel(uint8_t *d_out, const uint8_t *d_ref,
-const struct macroblock *d_mbs, int w, int h, int mb_cols, int mb_rows)
+__global__ void mc_kernel(uint8_t *d_out, cudaTextureObject_t tex_ref,
+                           const struct macroblock *d_mbs, int w, int h, int mb_cols, int mb_rows)
 {
-    // Macroblock index from the grid
-    int mb_x = blockIdx.x, mb_y = blockIdx.y;
+    // Macroblock indices.
+    int mb_x = blockIdx.x;
+    int mb_y = blockIdx.y;
 
-    // Return if outside of valid blocks
-    if (mb_x >= mb_cols || mb_y >= mb_rows) return;
+    if (mb_x >= mb_cols || mb_y >= mb_rows)
+        return;
 
-    // Pixel coordinates in original frame
-    int x = mb_x*8 + threadIdx.x, y = mb_y*8 + threadIdx.y;
+    // Determine the pixel coordinates in the output frame.
+    int x = mb_x * 8 + threadIdx.x;
+    int y = mb_y * 8 + threadIdx.y;
 
-    // Return if pixel out of bounds
-    if (x >= w || y >= h) return;
+    if (x >= w || y >= h)
+        return;
 
-    // Get macroblock offset
-    struct macroblock mb = d_mbs[mb_y*mb_cols + mb_x];
+    // Retrieve the macroblock data.
+    struct macroblock mb = d_mbs[mb_y * mb_cols + mb_x];
+    if (!mb.use_mv)
+        return;
 
-    // check if we should use mv, although redundant
-    if (!mb.use_mv) return;
+    // Compute the corresponding pixel coordinates in the reference frame.
+    int ref_x = x + mb.mv_x;
+    int ref_y = y + mb.mv_y;
 
-    // Compute pixel coordinates in reference
-    int ref_x = x + mb.mv_x, ref_y = y + mb.mv_y;
-    // Could check if reference is out of bounds, but should not be possible
+    // Fetch the pixel from the reference texture.
+    uint8_t pixel = tex2D<uint8_t>(tex_ref, ref_x, ref_y);
 
-    // Copy pixel to predicted frame
-    d_out[y*w + x] = d_ref[ref_y*w + ref_x];
-
+    // Write the pixel to the output frame.
+    d_out[y * w + x] = pixel;
 }
