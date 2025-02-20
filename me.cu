@@ -32,15 +32,16 @@ int mb_cols_y, mb_rows_y, mb_cols_uv, mb_rows_uv; // Columns and rows
 int mem_size_y, mem_size_uv, mem_size_mbs_y, mem_size_mbs_uv;
 int range;
 
-uint8_t *d_in_org_Y, *d_in_org_U, *d_in_org_V;    // Pointer to org input on GPU
-uint8_t *d_in_ref_Y, *d_in_ref_U, *d_in_ref_V;    // Pointer to ref input on GPU
-struct macroblock *d_mbs_Y, *d_mbs_U, *d_mbs_V;   // Pointer to macroblocks on GPU
-uint8_t *d_out_Y, *d_out_U, *d_out_V;             // Pointer to output from GPU
+uint8_t *d_in_org_Y, *d_in_org_U, *d_in_org_V;        // Pointer to org input on GPU
+cudaArray *d_in_ref_Y, *d_in_ref_U, *d_in_ref_V;      // Pointer to ref input on GPU (2d arrays)
+cudaTextureObject_t tex_ref_Y, tex_ref_U, tex_ref_V;  // Pointer to texture object for ref
+struct macroblock *d_mbs_Y, *d_mbs_U, *d_mbs_V;       // Pointer to macroblocks on GPU
+uint8_t *d_out_Y, *d_out_U, *d_out_V;                 // Pointer to output from GPU
 
-extern __global__ void me_kernel(const uint8_t *d_orig, uint8_t *d_ref,
+extern __global__ void me_kernel(const uint8_t *d_orig, cudaTextureObject_t d_ref,
 struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows);
 
-extern __global__ void mc_kernel(uint8_t *d_out, const uint8_t *d_ref,
+extern __global__ void mc_kernel(uint8_t *d_out, const cudaTextureObject_t d_ref,
 const struct macroblock *d_mbs, int w, int h, int mb_cols, int mb_rows);
 
 static cudaStream_t stream[3];
@@ -72,9 +73,43 @@ __host__ void gpu_init(struct c63_common *cm)
   CUDA_CHECK(cudaMalloc((void **) &d_in_org_U, mem_size_uv));
   CUDA_CHECK(cudaMalloc((void **) &d_in_org_V, mem_size_uv));
 
-  CUDA_CHECK(cudaMalloc((void **) &d_in_ref_Y, mem_size_y));
-  CUDA_CHECK(cudaMalloc((void **) &d_in_ref_U, mem_size_uv));
-  CUDA_CHECK(cudaMalloc((void **) &d_in_ref_V, mem_size_uv));
+  /* ----- Memory for Texture (Ref) ------- */
+
+  cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<uint8_t>();
+
+  // Allocate cuda Arrays for ref
+  CUDA_CHECK(cudaMallocArray(&d_in_ref_Y, &channelDesc, w_y, h_y));
+  CUDA_CHECK(cudaMallocArray(&d_in_ref_U, &channelDesc, w_uv, h_uv));
+  CUDA_CHECK(cudaMallocArray(&d_in_ref_V, &channelDesc, w_uv, h_uv));
+
+  // Initialize the resource and texture descriptors to zero
+  cudaResourceDesc resDesc;
+  cudaTextureDesc texDesc;
+
+  memset(&resDesc, 0, sizeof(cudaResourceDesc)); // TODO: check if needed
+  memset(&texDesc, 0, sizeof(cudaTextureDesc));
+
+  // Set fields in the descriptors
+  resDesc.resType = cudaResourceTypeArray;  
+  texDesc.addressMode[0] = cudaAddressModeClamp;
+  texDesc.addressMode[1] = cudaAddressModeClamp;
+  texDesc.filterMode = cudaFilterModePoint;
+  texDesc.readMode = cudaReadModeElementType;
+  texDesc.normalizedCoords = 0;
+
+  // For reference Y component.
+  resDesc.res.array.array = d_in_ref_Y;
+  CUDA_CHECK(cudaCreateTextureObject(&tex_ref_Y, &resDesc, &texDesc, NULL));
+
+  // For reference U component.
+  resDesc.res.array.array = d_in_ref_U;
+  CUDA_CHECK(cudaCreateTextureObject(&tex_ref_U, &resDesc, &texDesc, NULL));
+
+  // For reference V component.
+  resDesc.res.array.array = d_in_ref_V;
+  CUDA_CHECK(cudaCreateTextureObject(&tex_ref_V, &resDesc, &texDesc, NULL));
+
+  /* ---------------------------------- */
 
   // Allocate memory for macroblock offsets
   CUDA_CHECK(cudaMalloc((void**) &d_mbs_Y, mem_size_mbs_y));
@@ -98,9 +133,15 @@ __host__ void gpu_cleanup()
   CUDA_CHECK(cudaFree(d_in_org_U));
   CUDA_CHECK(cudaFree(d_in_org_V));
 
-  CUDA_CHECK(cudaFree(d_in_ref_Y));
-  CUDA_CHECK(cudaFree(d_in_ref_U));
-  CUDA_CHECK(cudaFree(d_in_ref_V));
+  /* ------ Free texture memory (ref) --------- */
+  if (tex_ref_Y) { CUDA_CHECK(cudaDestroyTextureObject(tex_ref_Y)); tex_ref_Y = 0; }
+  if (tex_ref_U) { CUDA_CHECK(cudaDestroyTextureObject(tex_ref_U)); tex_ref_U = 0; }
+  if (tex_ref_V) { CUDA_CHECK(cudaDestroyTextureObject(tex_ref_V)); tex_ref_V = 0; }
+  if (d_in_ref_Y) { CUDA_CHECK(cudaFreeArray(d_in_ref_Y)); d_in_ref_Y = NULL; }
+  if (d_in_ref_U) { CUDA_CHECK(cudaFreeArray(d_in_ref_U)); d_in_ref_U = NULL; }
+  if (d_in_ref_V) { CUDA_CHECK(cudaFreeArray(d_in_ref_V)); d_in_ref_V = NULL; }
+
+  /* ------------------------------------------- */
 
   CUDA_CHECK(cudaFree(d_mbs_Y));
   CUDA_CHECK(cudaFree(d_mbs_U));
@@ -121,11 +162,22 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
   
   // Copy data to device
   CUDA_CHECK(cudaMemcpyAsync(d_in_org_Y, cm->curframe->orig->Y, mem_size_y, cudaMemcpyHostToDevice, stream[0]));
-  CUDA_CHECK(cudaMemcpyAsync(d_in_ref_Y, cm->refframe->recons->Y, mem_size_y, cudaMemcpyHostToDevice, stream[0]));
+  CUDA_CHECK(cudaMemcpy2DToArrayAsync(d_in_ref_Y, 0, 0,
+                    cm->refframe->recons->Y, w_y * sizeof(uint8_t),
+                    w_y * sizeof(uint8_t), h_y,
+                    cudaMemcpyHostToDevice, stream[0]));
+  
   CUDA_CHECK(cudaMemcpyAsync(d_in_org_U, cm->curframe->orig->U, mem_size_uv, cudaMemcpyHostToDevice, stream[1]));
-  CUDA_CHECK(cudaMemcpyAsync(d_in_ref_U, cm->refframe->recons->U, mem_size_uv, cudaMemcpyHostToDevice, stream[1]));
+  CUDA_CHECK(cudaMemcpy2DToArrayAsync(d_in_ref_U, 0, 0,
+                    cm->refframe->recons->U, w_uv * sizeof(uint8_t),
+                    w_uv * sizeof(uint8_t), h_uv,
+                    cudaMemcpyHostToDevice, stream[1]));
+  
   CUDA_CHECK(cudaMemcpyAsync(d_in_org_V, cm->curframe->orig->V, mem_size_uv, cudaMemcpyHostToDevice, stream[2]));
-  CUDA_CHECK(cudaMemcpyAsync(d_in_ref_V, cm->refframe->recons->V, mem_size_uv, cudaMemcpyHostToDevice, stream[2]));
+  CUDA_CHECK(cudaMemcpy2DToArrayAsync(d_in_ref_V, 0, 0,
+                    cm->refframe->recons->V, w_uv * sizeof(uint8_t),
+                    w_uv * sizeof(uint8_t), h_uv,
+                    cudaMemcpyHostToDevice, stream[2]));
   
   /* Set dimentions for grid and blocks */
   // Blocks correspond to macroblocks in frame
@@ -138,7 +190,7 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
   
   /* Motion estimation for Luma (Y) */
   me_kernel<<<block_grid_y, thread_grid_y, 0, stream[0]>>>(
-    d_in_org_Y, d_in_ref_Y, d_mbs_Y, range, w_y, h_y, mb_cols_y, mb_rows_y);
+    d_in_org_Y, tex_ref_Y, d_mbs_Y, range, w_y, h_y, mb_cols_y, mb_rows_y);
 
   cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
@@ -151,7 +203,7 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
 
   /* Motion estimation for Chroma (U) */
   me_kernel<<<block_grid_uv, thread_grid_uv, 0, stream[1]>>>(
-    d_in_org_U, d_in_ref_U, d_mbs_U, range/2, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
+    d_in_org_U, tex_ref_U, d_mbs_U, range/2, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
   err = cudaGetLastError();
   if (err != cudaSuccess) {
@@ -164,7 +216,7 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
 
   /* Motion estimation for Chroma (V) */
   me_kernel<<<block_grid_uv, thread_grid_uv, 0, stream[2]>>>(
-    d_in_org_V, d_in_ref_V, d_mbs_V, range/2, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
+    d_in_org_V, tex_ref_V, d_mbs_V, range/2, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
   err = cudaGetLastError();
   if (err != cudaSuccess) {
@@ -189,7 +241,7 @@ void c63_motion_compensate(struct c63_common *cm)
 
   /* Motion compensation for Luma (Y) */
   mc_kernel<<<block_grid_y, thread_grid, 0, stream[0]>>>(
-    d_out_Y, d_in_ref_Y, d_mbs_Y, w_y, h_y, mb_cols_y, mb_rows_y);
+    d_out_Y, tex_ref_Y, d_mbs_Y, w_y, h_y, mb_cols_y, mb_rows_y);
 
   cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
@@ -202,7 +254,7 @@ void c63_motion_compensate(struct c63_common *cm)
 
   /* Motion estimation for Chroma (U) */
   mc_kernel<<<block_grid_uv, thread_grid, 0, stream[1]>>>(
-    d_out_U, d_in_ref_U, d_mbs_U, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
+    d_out_U, tex_ref_U, d_mbs_U, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
   err = cudaGetLastError();
   if (err != cudaSuccess) {
@@ -215,7 +267,7 @@ void c63_motion_compensate(struct c63_common *cm)
 
   /* Motion estimation for Chroma (V) */
   mc_kernel<<<block_grid_uv, thread_grid, 0, stream[2]>>>(
-    d_out_V, d_in_ref_V, d_mbs_V, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
+    d_out_V, tex_ref_V, d_mbs_V, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
   err = cudaGetLastError();
   if (err != cudaSuccess) {

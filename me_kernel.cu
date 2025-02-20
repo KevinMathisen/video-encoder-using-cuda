@@ -14,7 +14,7 @@
  * 
  * @return          Sum of absolute difference between blocks
  */
-__device__ int sad_block_8x8_device(const uint8_t *block1, uint8_t *block2, int stride)
+__device__ int sad_block_8x8_device(const uint8_t *block1, cudaTextureObject_t tex_ref, int stride, int ref_x, int ref_y)
 {
     int u, v;
     int result = 0;
@@ -23,7 +23,7 @@ __device__ int sad_block_8x8_device(const uint8_t *block1, uint8_t *block2, int 
     {
         for (u = 0; u < 8; ++u)
         {
-            result += abs(block2[v*stride+u] - block1[v*stride+u]);
+            result += abs(tex2D<uint8_t>(tex_ref, ref_x + u, ref_y + v) - block1[v*stride+u]);
         }
     }
     return result;
@@ -42,7 +42,7 @@ __device__ int sad_block_8x8_device(const uint8_t *block1, uint8_t *block2, int 
  * @param mb_cols   Number of columns
  * @param mb_rows   Number of rows
  */
-__global__ void me_kernel(const uint8_t *d_orig, uint8_t *d_ref,
+__global__ void me_kernel(const uint8_t *d_orig, cudaTextureObject_t d_ref,
 struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
 {
     // Macroblock index from the grid
@@ -67,7 +67,7 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     // (Does not support partial frame bounds) 
     if (x >= 0 && x <= w-8 && y >= 0 && y <= h-8) 
     {
-        sad_value = sad_block_8x8_device(d_orig + my*w+mx, d_ref+y*w+x, w);
+        sad_value = sad_block_8x8_device(d_orig + my*w+mx, d_ref, w, x, y);
     }
 
     // Next we need to find the lowest sad_value and its offset
@@ -125,7 +125,7 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
  * @param mb_cols   Number of columns 
  * @param mb_rows   Number of rows
  */
-__global__ void mc_kernel(uint8_t *d_out, const uint8_t *d_ref,
+__global__ void mc_kernel(uint8_t *d_out, const cudaTextureObject_t d_ref,
 const struct macroblock *d_mbs, int w, int h, int mb_cols, int mb_rows)
 {
     // Macroblock index from the grid
@@ -151,6 +151,6 @@ const struct macroblock *d_mbs, int w, int h, int mb_cols, int mb_rows)
     // Could check if reference is out of bounds, but should not be possible
 
     // Copy pixel to predicted frame
-    d_out[y*w + x] = d_ref[ref_y*w + ref_x];
+    d_out[y*w + x] = tex2D<uint8_t>(d_ref, ref_x, ref_y);
 
 }
