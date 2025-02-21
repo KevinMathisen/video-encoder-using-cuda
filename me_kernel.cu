@@ -157,18 +157,14 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
         
     __syncthreads(); // ensure all warps have written their minimum
 
-    for (int stride = 16; stride > 0; stride >>= 1)
+    // Final reduction using only first warp
+    if (warp_id == 0) 
     {
-        if (tid < stride) 
-        {
-            if (warp_sad[tid+stride] < warp_sad[tid])
-            {
-                warp_sad[tid] = warp_sad[tid+stride];
-                warp_mv_x[tid] = warp_mv_x[tid+stride];
-                warp_mv_y[tid] = warp_mv_y[tid+stride];
-            }
-        }
-        __syncthreads();
+        sad_value = warp_sad[lane]; // (assume 1024 threads and 32 lanes)
+        mv_x = warp_mv_x[lane];
+        mv_y = warp_mv_y[lane];
+
+        warp_min_reduction(sad_value, mv_x, mv_y);
     }
 
     // thread 0 has the smallest sad, return its offset
