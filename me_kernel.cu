@@ -14,13 +14,15 @@
  * 
  * @return          Sum of absolute difference between blocks
  */
-__device__ int sad_block_8x8_device(const uint8_t *block1, uint8_t *block2, int stride)
+__device__ __forceinline__ int sad_block_8x8_device(const uint8_t *block1, const uint8_t *block2, int stride)
 {
     int u, v;
     int result = 0;
 
+    #pragma unroll
     for (v = 0; v < 8; ++v)
     {
+        #pragma unroll
         for (u = 0; u < 8; ++u)
         {
             result += abs(block2[v*stride+u] - block1[v*stride+u]);
