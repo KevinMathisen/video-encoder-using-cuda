@@ -15,7 +15,7 @@
  * @return          Sum of absolute difference between blocks
  */
 __device__ __forceinline__ int sad_block_8x8_device(const uint8_t share_orig[8][8], 
-    const uint8_t share_ref[32][32], int ref_x, int ref_y)
+    const uint8_t share_ref[39][39], int ref_x, int ref_y)
 {
     int u, v;
     int result = 0;
@@ -48,7 +48,7 @@ __device__ __forceinline__ void warp_min_reduction(int &sad, int &mv_x, int &mv_
     {
         // Get the value to compare with
         int sad_compare = __shfl_xor_sync(0xFFFFFFFF, sad, offset);   // (assume 32 lanes in each warp because we 
-        int mv_x_compare = __shfl_xor_sync(0xFFFFFFFF, mv_x, offset); //  have search range 16 so 1025 threads.
+        int mv_x_compare = __shfl_xor_sync(0xFFFFFFFF, mv_x, offset); //  have search range 16 so 1024 threads.
         int mv_y_compare = __shfl_xor_sync(0xFFFFFFFF, mv_y, offset); //  could use __activemask() instead of 0xFFFFFFFF)
 
         if (sad_compare < sad) { // Update values to the one with smallest sad
@@ -86,7 +86,7 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
 
     // Allocate shared memory for original 8x8 block and 32x32 reference block
     __shared__ uint8_t share_orig[8][8];
-    __shared__ uint8_t share_ref[32][32];
+    __shared__ uint8_t share_ref[39][39];
 
     // Thread index to identify which candidate
     int tid_x = threadIdx.x, tid_y = threadIdx.y;
@@ -102,11 +102,21 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     // i.e. use the thread index to calculcate where in the search area it is
     int x = search_left + tid_x, y = search_top + tid_y;
 
-    // load 32x32 part of reference frame we use to compare into shared memory
+    // For each thread: load 32x32 part of reference frame we use to compare into shared memory
     if (x >= 0 && x < w && y >= 0 && y < h)
         share_ref[tid_y][tid_x] = d_ref[y*w+x];
     else
         share_ref[tid_y][tid_x] = 0; // Set reference outside of frame to 0
+
+    // For remaning pixels to copy in 39x39 block, load using more threads. 
+    if (tid_x < 7 && x + 32 < w) 
+        share_ref[tid_y][tid_x + 32] = (y >= 0 && y < h) ? d_ref[y * w + (x + 32)] : 0;
+
+    if (tid_y < 7 && y + 32 < h) 
+        share_ref[tid_y + 32][tid_x] = (x >= 0 && x < w) ? d_ref[(y + 32) * w + x] : 0;
+
+    if (tid_x < 7 && tid_y < 7 && x + 32 < w && y + 32 < h) 
+        share_ref[tid_y + 32][tid_x + 32] = d_ref[(y + 32) * w + (x + 32)];
 
     __syncthreads(); // ensure orig and ref is in shared memory before continuing
 
