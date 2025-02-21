@@ -35,31 +35,6 @@ __device__ __forceinline__ int sad_block_8x8_device(const uint8_t share_orig[8][
 }
 
 /**
- * Uses warp level primitive to find the smallest sad value and its offset for a warp
- * 
- * @param sad   SAD value of a thread/candidate 
- * @param mv_x  X motion vector offset for candidate
- * @param mv_y  Y motion vector offset for candidate
- */
-// __device__ __forceinline__ void warp_min_reduction(int &sad, int &mv_x, int &mv_y)
-// {
-//     #pragma unroll
-//     for (int offset = 16; offset > 0; offset /= 2)
-//     {
-//         // Get the value to compare with
-//         int sad_compare = __shfl_xor_sync(0xFFFFFFFF, sad, offset);   // (assume 32 lanes in each warp because we 
-//         int mv_x_compare = __shfl_xor_sync(0xFFFFFFFF, mv_x, offset); //  have search range 16 so 1024 threads.
-//         int mv_y_compare = __shfl_xor_sync(0xFFFFFFFF, mv_y, offset); //  could use __activemask() instead of 0xFFFFFFFF)
-
-//         if (sad_compare < sad) { // Update values to the one with smallest sad
-//             sad = sad_compare;
-//             mv_x = mv_x_compare;
-//             mv_y = mv_y_compare;
-//         }
-//     }
-// }
-
-/**
  * Kernel for doing motion estimation on a given macroblock, and finding the
  * offset with the smallest sad to use in the encoding. 
  * 
@@ -142,15 +117,18 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     // Find lowest sad for each warp
     for (int offset = 16; offset > 0; offset /= 2) 
     {
-        int sad_compare = __shfl_down_sync(0xFFFFFFFF, sad_value, offset);  // (assume 32 lanes in each warp because we 
-        int mv_x_compare = __shfl_down_sync(0xFFFFFFFF, mv_x, offset);      //  have search range 16 so 1024 threads.
-        int mv_y_compare = __shfl_down_sync(0xFFFFFFFF, mv_y, offset);      //  could use __activemask() instead of 0xFFFFFFFF)
-
-        if (sad_compare < sad_value) 
+        if (lane < offset) 
         {
-            sad_value = sad_compare;
-            mv_x = mv_x_compare;
-            mv_y = mv_y_compare;
+            int sad_compare = __shfl_down_sync(0xFFFFFFFF, sad_value, offset);  // (assume 32 lanes in each warp because we 
+            int mv_x_compare = __shfl_down_sync(0xFFFFFFFF, mv_x, offset);      //  have search range 16 so 1024 threads.
+            int mv_y_compare = __shfl_down_sync(0xFFFFFFFF, mv_y, offset);      //  could use __activemask() instead of 0xFFFFFFFF)
+
+            if (sad_compare < sad_value) 
+            {
+                sad_value = sad_compare;
+                mv_x = mv_x_compare;
+                mv_y = mv_y_compare;
+            }
         }
     }
 
@@ -180,15 +158,18 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
         // Find lowest sad for remaining warp values
         for (int offset = 16; offset > 0; offset /= 2) 
         {
-            int sad_compare = __shfl_down_sync(0xFFFFFFFF, sad_value, offset);  // (assume 32 lanes in each warp because we 
-            int mv_x_compare = __shfl_down_sync(0xFFFFFFFF, mv_x, offset);      //  have search range 16 so 1024 threads.
-            int mv_y_compare = __shfl_down_sync(0xFFFFFFFF, mv_y, offset);      //  could use __activemask() instead of 0xFFFFFFFF)
-
-            if (sad_compare < sad_value) 
+            if (lane < offset)
             {
-                sad_value = sad_compare;
-                mv_x = mv_x_compare;
-                mv_y = mv_y_compare;
+                int sad_compare = __shfl_down_sync(0xFFFFFFFF, sad_value, offset);  // (assume 32 lanes in each warp because we 
+                int mv_x_compare = __shfl_down_sync(0xFFFFFFFF, mv_x, offset);      //  have search range 16 so 1024 threads.
+                int mv_y_compare = __shfl_down_sync(0xFFFFFFFF, mv_y, offset);      //  could use __activemask() instead of 0xFFFFFFFF)
+
+                if (sad_compare < sad_value) 
+                {
+                    sad_value = sad_compare;
+                    mv_x = mv_x_compare;
+                    mv_y = mv_y_compare;
+                }
             }
         }
     }
