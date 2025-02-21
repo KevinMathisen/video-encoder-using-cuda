@@ -14,7 +14,8 @@
  * 
  * @return          Sum of absolute difference between blocks
  */
-__device__ __forceinline__ int sad_block_8x8_device(const uint8_t share_orig[8][8], const uint8_t *block2, int stride)
+__device__ __forceinline__ int sad_block_8x8_device(const uint8_t share_orig[8][8], 
+    const uint8_t share_ref[32][32], int ref_x, int ref_y)
 {
     int u, v;
     int result = 0;
@@ -24,10 +25,10 @@ __device__ __forceinline__ int sad_block_8x8_device(const uint8_t share_orig[8][
         for (u = 0; u < 8; u+=4)
         {
             // Load 4 bytes at a time for memory coalescing
-            result += abs(block2[v*stride+u] - share_orig[v][u]);
-            result += abs(block2[v*stride+u+1] - share_orig[v][u+1]);
-            result += abs(block2[v*stride+u+2] - share_orig[v][u+2]);
-            result += abs(block2[v*stride+u+3] - share_orig[v][u+3]);
+            result += abs(share_ref[ref_y + v][ref_x+u] - share_orig[v][u]);
+            result += abs(share_ref[ref_y + v][ref_x+u+1] - share_orig[v][u+1]);
+            result += abs(share_ref[ref_y + v][ref_x+u+2] - share_orig[v][u+2]);
+            result += abs(share_ref[ref_y + v][ref_x+u+3] - share_orig[v][u+3]);
         }
     }
     return result;
@@ -58,15 +59,17 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     // Find where orig block starts
     int mx = mb_x * 8, my = mb_y * 8;
 
-    // Allocate shared memory for original 8x8 block
+    // Allocate shared memory for original 8x8 block and 32x32 reference block
     __shared__ uint8_t share_orig[8][8];
-    // load original 8x8 block into shared memory
+    __shared__ uint8_t share_ref[32][32];
+
+    // Thread index to identify which candidate
     int tid_x = threadIdx.x, tid_y = threadIdx.y;
+
+    // load original 8x8 block into shared memory
     if (tid_x < 8 && tid_y < 8)
         share_orig[tid_y][tid_x] = d_orig[(my+tid_y)*w + (mx+tid_x)];
     
-    __syncthreads(); // ensure block is loaded
-
     // Calculate left top corner for search area in reference frame
     int search_left = mb_x*8-range, search_top = mb_y*8-range;
 
@@ -74,13 +77,21 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     // i.e. use the thread index to calculcate where in the search area it is
     int x = search_left + tid_x, y = search_top + tid_y;
 
+    // load 32x32 part of reference frame we use to compare into shared memory
+    if (x >= 0 && x < w && y >= 0 && y < h)
+        share_ref[tid_y][tid_x] = d_ref[y*w+x];
+    else
+        share_ref[tid_y][tid_x] = 0; // Set reference outside of frame to 0
+
+    __syncthreads(); // ensure orig and ref is in shared memory before continuing
+
     int sad_value = INT_MAX;
 
     // If we are within bounds of reference frame 
     // (Does not support partial frame bounds) 
     if (x >= 0 && x <= w-8 && y >= 0 && y <= h-8) 
     {
-        sad_value = sad_block_8x8_device(share_orig, d_ref+y*w+x, w);
+        sad_value = sad_block_8x8_device(share_orig, share_ref, x, y);
     }
 
     // Next we need to find the lowest sad_value and its offset
