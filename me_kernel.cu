@@ -41,23 +41,23 @@ __device__ __forceinline__ int sad_block_8x8_device(const uint8_t share_orig[8][
  * @param mv_x  X motion vector offset for candidate
  * @param mv_y  Y motion vector offset for candidate
  */
-__device__ __forceinline__ void warp_min_reduction(int &sad, int &mv_x, int &mv_y)
-{
-    #pragma unroll
-    for (int offset = 16; offset > 0; offset /= 2)
-    {
-        // Get the value to compare with
-        int sad_compare = __shfl_xor_sync(0xFFFFFFFF, sad, offset);   // (assume 32 lanes in each warp because we 
-        int mv_x_compare = __shfl_xor_sync(0xFFFFFFFF, mv_x, offset); //  have search range 16 so 1024 threads.
-        int mv_y_compare = __shfl_xor_sync(0xFFFFFFFF, mv_y, offset); //  could use __activemask() instead of 0xFFFFFFFF)
+// __device__ __forceinline__ void warp_min_reduction(int &sad, int &mv_x, int &mv_y)
+// {
+//     #pragma unroll
+//     for (int offset = 16; offset > 0; offset /= 2)
+//     {
+//         // Get the value to compare with
+//         int sad_compare = __shfl_xor_sync(0xFFFFFFFF, sad, offset);   // (assume 32 lanes in each warp because we 
+//         int mv_x_compare = __shfl_xor_sync(0xFFFFFFFF, mv_x, offset); //  have search range 16 so 1024 threads.
+//         int mv_y_compare = __shfl_xor_sync(0xFFFFFFFF, mv_y, offset); //  could use __activemask() instead of 0xFFFFFFFF)
 
-        if (sad_compare < sad) { // Update values to the one with smallest sad
-            sad = sad_compare;
-            mv_x = mv_x_compare;
-            mv_y = mv_y_compare;
-        }
-    }
-}
+//         if (sad_compare < sad) { // Update values to the one with smallest sad
+//             sad = sad_compare;
+//             mv_x = mv_x_compare;
+//             mv_y = mv_y_compare;
+//         }
+//     }
+// }
 
 /**
  * Kernel for doing motion estimation on a given macroblock, and finding the
@@ -139,7 +139,20 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     // Calculate motion vector offset for thread/candidate
     int mv_x = x-mx, mv_y = y-my;
 
-    warp_min_reduction(sad_value, mv_x, mv_y);
+    // Find lowest sad for each warp
+    for (int offset = 16; offset > 0; offset /= 2) 
+    {
+        int sad_compare = __shfl_down_sync(0xFFFFFFFF, sad_value, offset);  // (assume 32 lanes in each warp because we 
+        int mv_x_compare = __shfl_down_sync(0xFFFFFFFF, mv_x, offset);      //  have search range 16 so 1024 threads.
+        int mv_y_compare = __shfl_down_sync(0xFFFFFFFF, mv_y, offset);      //  could use __activemask() instead of 0xFFFFFFFF)
+
+        if (sad_compare < sad_value) 
+        {
+            sad_value = sad_compare;
+            mv_x = mv_x_compare;
+            mv_y = mv_y_compare;
+        }
+    }
 
     __syncthreads(); // Ensure all warps are done finding their best SAD
 
@@ -164,7 +177,20 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
         mv_x = warp_mv_x[lane];
         mv_y = warp_mv_y[lane];
 
-        warp_min_reduction(sad_value, mv_x, mv_y);
+        // Find lowest sad for remaining warp values
+        for (int offset = 16; offset > 0; offset /= 2) 
+        {
+            int sad_compare = __shfl_down_sync(0xFFFFFFFF, sad_value, offset);  // (assume 32 lanes in each warp because we 
+            int mv_x_compare = __shfl_down_sync(0xFFFFFFFF, mv_x, offset);      //  have search range 16 so 1024 threads.
+            int mv_y_compare = __shfl_down_sync(0xFFFFFFFF, mv_y, offset);      //  could use __activemask() instead of 0xFFFFFFFF)
+
+            if (sad_compare < sad_value) 
+            {
+                sad_value = sad_compare;
+                mv_x = mv_x_compare;
+                mv_y = mv_y_compare;
+            }
+        }
     }
 
     // thread 0 has the smallest sad, return its offset
