@@ -23,7 +23,8 @@ __device__ __forceinline__ int sad_block_8x8_device(const uint8_t *block1, const
     {
         for (u = 0; u < 8; ++u)
         {
-            result += abs(block2[v*stride+u] - block1[v*stride+u]);
+            int differance = block2[v*stride+u] - block1[v*stride+u];
+            result += (differance ^ (differance >> 31)) - (differance >> 31);
         }
     }
     return result;
