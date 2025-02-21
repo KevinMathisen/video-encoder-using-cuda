@@ -91,7 +91,7 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     // (Does not support partial frame bounds) 
     if (x >= 0 && x <= w-8 && y >= 0 && y <= h-8) 
     {
-        sad_value = sad_block_8x8_device(share_orig, share_ref, x, y);
+        sad_value = sad_block_8x8_device(share_orig, share_ref, tid_x, tid_y);
     }
 
     // Next we need to find the lowest sad_value and its offset
