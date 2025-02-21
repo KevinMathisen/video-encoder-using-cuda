@@ -120,63 +120,44 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     }
 
     // Next we need to find the lowest sad_value and its offset
-    // Use warp level reduction + atomic min for this 
+    // Store (sad, mv_x, mv_y) in shared memory for each thread
 
-    int tid = tid_y * blockDim.x + tid_x;
-    int lane = tid%32;      // index of thread in warp
-    int warp_id = tid/32;   // index of warp
+    // Shared memory for storing sad, mv_x, and my_y:
+    __shared__ int s_sad[1024];
+    __shared__ int s_mv_x[1024];
+    __shared__ int s_mv_y[1024];
 
-    // Calculate motion vector offset for thread/candidate
-    int mv_x = x-mx, mv_y = y-my;
+    // Get the thread index used to access shared memory
+    int tid = threadIdx.y*blockDim.x + threadIdx.x;
 
-    warp_min_reduction(sad_value, mv_x, mv_y);
+    s_sad[tid] = sad_value;
+    s_mv_x[tid] = x-mx;
+    s_mv_y[tid] = y-my;
 
-    __syncthreads(); // Ensure all warps are done finding their best SAD
+    __syncthreads(); // Ensure all thread values are in shared memory before reduce
 
-    // Now we need to find best SAD from the remaning ones
-    __shared__ int warp_sad[32];
-    __shared__ int warp_mv_x[32];
-    __shared__ int warp_mv_y[32];
-
-    if (lane == 0) // use best sad from warp
+    // Use reduction to find the minimum sad
+    // Start with half of the blocks, then 1/4, 1/8, etc until we only have one left
+    for (int stride = blockDim.x*blockDim.y / 2; stride > 0; stride >>= 1)
     {
-        warp_sad[warp_id] = sad_value;
-        warp_mv_x[warp_id] = mv_x;
-        warp_mv_y[warp_id] = mv_y;
-    }
-        
-    __syncthreads(); // ensure all warps have written their minimum
-
-    for (int stride = 16; stride > 0; stride >>= 1)
-    {
-        if (tid < stride) 
+        if (tid < stride) // only use threads before stride
         {
-            if (warp_sad[tid+stride] < warp_sad[tid])
+            if (s_sad[tid + stride] < s_sad[tid]) // Check if we should move data to left
             {
-                warp_sad[tid] = warp_sad[tid+stride];
-                warp_mv_x[tid] = warp_mv_x[tid+stride];
-                warp_mv_y[tid] = warp_mv_y[tid+stride];
+                s_sad[tid] = s_sad[tid+stride];
+                s_mv_x[tid] = s_mv_x[tid+stride];
+                s_mv_y[tid] = s_mv_y[tid+stride];
             }
         }
-        __syncthreads();
+        __syncthreads(); // Ensure all threads have copied if needed
     }
-
-    // Final reduction using only first warp
-    // if (warp_id == 0) 
-    // {
-    //     sad_value = warp_sad[lane]; // (assume 1024 threads and 32 lanes)
-    //     mv_x = warp_mv_x[lane];
-    //     mv_y = warp_mv_y[lane];
-
-    //     warp_min_reduction(sad_value, mv_x, mv_y);
-    // }
 
     // thread 0 has the smallest sad, return its offset
     if (tid == 0)
     {
         struct macroblock *mb = &d_mbs[mb_y*mb_cols + mb_x];
-        mb->mv_x = warp_mv_x[0];
-        mb->mv_y = warp_mv_y[0];
+        mb->mv_x = s_mv_x[0];
+        mb->mv_y = s_mv_y[0];
         mb->use_mv = 1; // always assume MV to be beneficial
     }
 }
