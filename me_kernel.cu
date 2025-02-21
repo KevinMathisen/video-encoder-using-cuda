@@ -131,7 +131,11 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
 
     __syncthreads(); // Ensure all warps are done finding their best SAD
 
-    // Now we need to find best SAD from the remaning ones
+    // Now we need to find best SAD from the remaning ones!
+
+    // Find amount of warps
+    int num_warps = (blockDim.x*blockDim.y)/32;
+
     __shared__ int warp_sad[32];
     __shared__ int warp_mv_x[32];
     __shared__ int warp_mv_y[32];
@@ -148,12 +152,12 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     // Final reduction using only first warp
     if (warp_id == 0) 
     {
-        sad_value = warp_sad[lane]; // (assume 1024 threads and 32 lanes)
-        mv_x = warp_mv_x[lane];
-        mv_y = warp_mv_y[lane];
+        sad_value = (lane < num_warps) ? warp_sad[lane] : INT_MAX;
+        mv_x = (lane < num_warps) ? warp_mv_x[lane] : 0;
+        mv_y = (lane < num_warps) ? warp_mv_y[lane] : 0;
 
         // Find lowest sad for remaining warp values
-        for (int offset = 16; offset > 0; offset /= 2) 
+        for (int offset = num_warps/2; offset > 0; offset /= 2) 
         {
             int sad_compare = __shfl_down_sync(0xFFFFFFFF, sad_value, offset);  // (assume 32 lanes in each warp because we 
             int mv_x_compare = __shfl_down_sync(0xFFFFFFFF, mv_x, offset);      //  have search range 16 so 1024 threads.
