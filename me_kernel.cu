@@ -43,113 +43,68 @@ __device__ __forceinline__ int sad_block_8x8_device(const uint8_t *block1, uint8
  * @param mb_rows   Number of rows
  */
 __global__ void me_kernel(const uint8_t *d_orig, uint8_t *d_ref,
-struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
+    struct macroblock *d_mbs, int range, int w, int h,
+    int mb_cols, int mb_rows)
 {
-    // Macroblock index from the grid
+    // Macroblock indices from grid dimensions.
     int mb_x = blockIdx.x, mb_y = blockIdx.y;
+    if (mb_x >= mb_cols || mb_y >= mb_rows)
+        return;
 
-    // Return if outside of valid blocks
-    if (mb_x >= mb_cols || mb_y >= mb_rows) return;
+    // Calculate search area top left corner in reference frame.
+    int search_left = mb_x * 8 - range;
+    int search_top  = mb_y * 8 - range;
 
-    // Calculate left top corner for search area in reference frame
-    int search_left = mb_x*8-range, search_top = mb_y*8-range;
+    // Determine candidate block position using thread indices.
+    int x = search_left + threadIdx.x;
+    int y = search_top  + threadIdx.y;
 
-    // Calculate where the thread should then start, 
-    // i.e. use the thread index to calculcate where in the search area it is
-    int x = search_left + threadIdx.x, y = search_top + threadIdx.y;
-
-    // Find where orig block starts
-    int mx = mb_x * 8, my = mb_y * 8;
+    // Calculate starting point of the original block.
+    int mx = mb_x * 8;
+    int my = mb_y * 8;
 
     int sad_value = INT_MAX;
-
-    // If we are within bounds of reference frame 
-    // (Does not support partial frame bounds) 
-    if (x >= 0 && x <= w-8 && y >= 0 && y <= h-8) 
-    {
-        sad_value = sad_block_8x8_device(d_orig + my*w+mx, d_ref+y*w+x, w);
+    // Only compute SAD if candidate block is within valid bounds.
+    if (x >= 0 && x <= w - 8 && y >= 0 && y <= h - 8) {
+         sad_value = sad_block_8x8_device(d_orig + my * w + mx,
+                    d_ref + y * w + x, w);
     }
 
-    // Next we need to find the lowest sad_value and its offset
-    // Store (sad, mv_x, mv_y) in shared memory for each thread
-
-    // Shared memory for storing sad, mv_x, and my_y:
+    // Shared memory arrays for reduction (assumes blockDim.x * blockDim.y = 1024).
     __shared__ int s_sad[1024];
     __shared__ int s_mv_x[1024];
     __shared__ int s_mv_y[1024];
 
-    // Get the thread index used to access shared memory
-    int tid = threadIdx.y*blockDim.x + threadIdx.x;
+    // Compute a unique thread id within the block.
+    int tid = threadIdx.y * blockDim.x + threadIdx.x;
 
-    s_sad[tid] = sad_value;
-    s_mv_x[tid] = x-mx;
-    s_mv_y[tid] = y-my;
+    // Store each thread's SAD value and motion vector (offset relative to original).
+    s_sad[tid]  = sad_value;
+    s_mv_x[tid] = x - mx;
+    s_mv_y[tid] = y - my;
 
-    // After storing each thread's SAD and motion vector into shared memory…
     __syncthreads();
 
-    // Instead of a full block-wide reduction, perform warp-level reduction first.
-    int lane   = tid & 31;     // Lane index within the warp (0-31)
-    int warpId = tid >> 5;     // Warp index
-
-    // Load the thread's value from shared memory
-    int local_sad  = s_sad[tid];
-    int local_mv_x = s_mv_x[tid];
-    int local_mv_y = s_mv_y[tid];
-
-    // Use warp shuffle to reduce within each warp.
-    // Note: 0xFFFFFFFF is a mask for all active threads.
-    for (int offset = 16; offset > 0; offset /= 2) {
-        int other_sad  = __shfl_down_sync(0xFFFFFFFF, local_sad, offset);
-        int other_mv_x = __shfl_down_sync(0xFFFFFFFF, local_mv_x, offset);
-        int other_mv_y = __shfl_down_sync(0xFFFFFFFF, local_mv_y, offset);
-        
-        if (other_sad < local_sad) {
-            local_sad  = other_sad;
-            local_mv_x = other_mv_x;
-            local_mv_y = other_mv_y;
+    // Full block reduction using shared memory.
+    // Reduce 1024 values down to 1.
+    for (int stride = blockDim.x * blockDim.y / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            if (s_sad[tid + stride] < s_sad[tid]) {
+                s_sad[tid]  = s_sad[tid + stride];
+                s_mv_x[tid] = s_mv_x[tid + stride];
+                s_mv_y[tid] = s_mv_y[tid + stride];
+            }   
         }
+        __syncthreads();
     }
 
-    // Each warp’s first lane writes its reduced result to shared memory.
-    __shared__ int warp_sad[32];
-    __shared__ int warp_mv_x[32];
-    __shared__ int warp_mv_y[32];
-    if (lane == 0) {
-        warp_sad[warpId]  = local_sad;
-        warp_mv_x[warpId] = local_mv_x;
-        warp_mv_y[warpId] = local_mv_y;
+    // The thread with tid 0 writes the final result.
+    if (tid == 0) {
+        int mb_index = mb_y * mb_cols + mb_x;
+        d_mbs[mb_index].sad  = s_sad[0];
+        d_mbs[mb_index].mv_x = s_mv_x[0];
+        d_mbs[mb_index].mv_y = s_mv_y[0];
     }
-    __syncthreads();
-
-    // Now, only the first warp (threads with tid < 32) participate in reducing the 32 warp results.
-    if (tid < 32) {
-        int final_sad  = warp_sad[lane];
-        int final_mv_x = warp_mv_x[lane];
-        int final_mv_y = warp_mv_y[lane];
-        
-        // Again, use warp-level reduction among these 32 values.
-        for (int offset = 16; offset > 0; offset /= 2) {
-            int other_sad  = __shfl_down_sync(0xFFFFFFFF, final_sad, offset);
-            int other_mv_x = __shfl_down_sync(0xFFFFFFFF, final_mv_x, offset);
-            int other_mv_y = __shfl_down_sync(0xFFFFFFFF, final_mv_y, offset);
-            
-            if (other_sad < final_sad) {
-                final_sad  = other_sad;
-                final_mv_x = other_mv_x;
-                final_mv_y = other_mv_y;
-            }
-        }
-        
-        // The first lane of the first warp writes the final best motion vector.
-        if (lane == 0) {
-            int mb_index = mb_y * mb_cols + mb_x;
-            d_mbs[mb_index].sad  = final_sad;
-            d_mbs[mb_index].mv_x = final_mv_x;
-            d_mbs[mb_index].mv_y = final_mv_y;
-        }
-    }
-
 }
 
 
