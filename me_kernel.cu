@@ -55,12 +55,15 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     // Return if outside of valid blocks
     if (mb_x >= mb_cols || mb_y >= mb_rows) return;
 
+    // Find where orig block starts
+    int mx = mb_x * 8, my = mb_y * 8;
+
     // Allocate shared memory for original 8x8 block
     __shared__ uint8_t share_orig[8][8];
     // load original 8x8 block into shared memory
     int tid_x = threadIdx.x, tid_y = threadIdx.y;
     if (tid_x < 8 && tid_y < 8)
-        share_orig[tid_y][tid_x] = d_orig[(mb_y*8+tid_y)*w + (mb_x*8+tid_x)];
+        share_orig[tid_y][tid_x] = d_orig[(my+tid_y)*w + (mx+tid_x)];
     
     __syncthreads(); // ensure block is loaded
 
@@ -70,9 +73,6 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     // Calculate where the thread should then start, 
     // i.e. use the thread index to calculcate where in the search area it is
     int x = search_left + tid_x, y = search_top + tid_y;
-
-    // Find where orig block starts
-    int mx = mb_x * 8, my = mb_y * 8;
 
     int sad_value = INT_MAX;
 
