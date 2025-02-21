@@ -71,6 +71,8 @@ struct macroblock
 {
   int use_mv;
   int8_t mv_x, mv_y;
+
+  int sad; //TODO: remove this if not needed
 };
 
 struct frame
