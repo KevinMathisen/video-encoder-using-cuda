@@ -60,7 +60,7 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     // load original 8x8 block into shared memory
     int tid_x = threadIdx.x, tid_y = threadIdx.y;
     if (tid_x < 8 && tid_y < 8)
-        share_orig[tid_y][tid_x] = d_orig[(my+tid_y)*w + (mx+tid_x)];
+        share_orig[tid_y][tid_x] = d_orig[(mb_y*8+tid_y)*w + (mb_x*8+tid_x)];
     
     __syncthreads(); // ensure block is loaded
 
