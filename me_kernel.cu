@@ -171,8 +171,8 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     if (tid == 0)
     {
         struct macroblock *mb = &d_mbs[mb_y*mb_cols + mb_x];
-        mb->mv_x = warp_mv_x[0];
-        mb->mv_y = warp_mv_y[0];
+        mb->mv_x = mv_x;
+        mb->mv_y = mv_y;
         mb->use_mv = 1; // always assume MV to be beneficial
     }
 }
