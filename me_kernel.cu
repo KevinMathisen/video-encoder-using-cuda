@@ -14,7 +14,7 @@
  * 
  * @return          Sum of absolute difference between blocks
  */
-__device__ __forceinline__ int sad_block_8x8_device(const uint8_t *block1, const uint8_t *block2, int stride)
+__device__ __forceinline__ int sad_block_8x8_device(const uint8_t share_orig[8][8], const uint8_t *block2, int stride)
 {
     int u, v;
     int result = 0;
@@ -24,10 +24,10 @@ __device__ __forceinline__ int sad_block_8x8_device(const uint8_t *block1, const
         for (u = 0; u < 8; u+=4)
         {
             // Load 4 bytes at a time for memory coalescing
-            result += abs(block2[v*stride+u] - block1[v*stride+u]);
-            result += abs(block2[v*stride+u+1] - block1[v*stride+u+1]);
-            result += abs(block2[v*stride+u+2] - block1[v*stride+u+2]);
-            result += abs(block2[v*stride+u+3] - block1[v*stride+u+3]);
+            result += abs(block2[v*stride+u] - share_orig[v][u]);
+            result += abs(block2[v*stride+u+1] - share_orig[v][u+1]);
+            result += abs(block2[v*stride+u+2] - share_orig[v][u+2]);
+            result += abs(block2[v*stride+u+3] - share_orig[v][u+3]);
         }
     }
     return result;
@@ -55,12 +55,21 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     // Return if outside of valid blocks
     if (mb_x >= mb_cols || mb_y >= mb_rows) return;
 
+    // Allocate shared memory for original 8x8 block
+    __shared__ uint8_t share_orig[8][8];
+    // load original 8x8 block into shared memory
+    int tid_x = threadIdx.x, tid_y = threadIdx.y;
+    if (tid_x < 8 && tid_y < 8)
+        share_orig[tid_y][tid_x] = d_orig[(my+tid_y)*w + (mx+tid_x)];
+    
+    __syncthreads(); // ensure block is loaded
+
     // Calculate left top corner for search area in reference frame
     int search_left = mb_x*8-range, search_top = mb_y*8-range;
 
     // Calculate where the thread should then start, 
     // i.e. use the thread index to calculcate where in the search area it is
-    int x = search_left + threadIdx.x, y = search_top + threadIdx.y;
+    int x = search_left + tid_x, y = search_top + tid_y;
 
     // Find where orig block starts
     int mx = mb_x * 8, my = mb_y * 8;
@@ -71,7 +80,7 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     // (Does not support partial frame bounds) 
     if (x >= 0 && x <= w-8 && y >= 0 && y <= h-8) 
     {
-        sad_value = sad_block_8x8_device(d_orig + my*w+mx, d_ref+y*w+x, w);
+        sad_value = sad_block_8x8_device(share_orig, d_ref+y*w+x, w);
     }
 
     // Next we need to find the lowest sad_value and its offset
@@ -83,7 +92,7 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     __shared__ int s_mv_y[1024];
 
     // Get the thread index used to access shared memory
-    int tid = threadIdx.y*blockDim.x + threadIdx.x;
+    int tid = tid_y*blockDim.x + tid_x;
 
     s_sad[tid] = sad_value;
     s_mv_x[tid] = x-mx;
