@@ -24,15 +24,10 @@ __device__ __forceinline__ int sad_block_8x8_device(const uint8_t *block1, const
         for (u = 0; u < 8; u+=4)
         {
             // Load 4 bytes at a time for memory coalescing
-            int differance1 = block2[v*stride+u] - block1[v*stride+u];
-            int differance2 = block2[v*stride+u+1] - block1[v*stride+u+1];
-            int differance3 = block2[v*stride+u+2] - block1[v*stride+u+2];
-            int differance4 = block2[v*stride+u+3] - block1[v*stride+u+3];
-
-            result += (differance1 ^ (differance1 >> 31)) - (differance1 >> 31);
-            result += (differance2 ^ (differance2 >> 31)) - (differance2 >> 31);
-            result += (differance3 ^ (differance3 >> 31)) - (differance3 >> 31);
-            result += (differance4 ^ (differance4 >> 31)) - (differance4 >> 31);
+            result += abs(block2[v*stride+u] - block1[v*stride+u]);
+            result += abs(block2[v*stride+u+1] - block1[v*stride+u+1]);
+            result += abs(block2[v*stride+u+2] - block1[v*stride+u+2]);
+            result += abs(block2[v*stride+u+3] - block1[v*stride+u+3]);
         }
     }
     return result;
