@@ -225,7 +225,4 @@ void c63_motion_compensate(struct c63_common *cm)
 
   // Copy results back to host
   CUDA_CHECK(cudaMemcpyAsync(cm->curframe->predicted->V, d_out_V, mem_size_uv, cudaMemcpyDeviceToHost, stream[2]));
-
-  // Ensure predicted is copied back to host before continuing with DCT
-  cudaDeviceSynchronize();
 }

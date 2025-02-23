@@ -82,7 +82,7 @@ static void write_SOF0(struct c63_common *cm)
   put_byte(cm->e_ctx.fp, 2); /* Quant. tbl. id */
 
   /* Is this a keyframe or not? */
-  put_byte(cm->e_ctx.fp, cm->curframe->keyframe);
+  put_byte(cm->e_ctx.fp, cm->refframe->keyframe);
 }
 
 static void write_DHT_HTS(struct c63_common *cm, uint8_t id, uint8_t *numlength,
@@ -177,7 +177,7 @@ static void write_block(struct c63_common *cm, int16_t *in_data, uint32_t width,
 
   /* Write motion vector */
   struct macroblock *mb =
-    &cm->curframe->mbs[channel][voffset/8 * cm->padw[channel]/8 + uoffset/8];
+    &cm->refframe->mbs[channel][voffset/8 * cm->padw[channel]/8 + uoffset/8];
 
   /* Use inter pred? */
   put_bits(&cm->e_ctx, mb->use_mv, 1);
@@ -330,11 +330,11 @@ static void write_interleaved_data(struct c63_common *cm)
   {
     for(u = 0; u < ublocks; ++u)
     {
-      write_interleaved_data_MCU(cm, cm->curframe->residuals->Ydct, cm->ypw,
+      write_interleaved_data_MCU(cm, cm->refframe->residuals->Ydct, cm->ypw,
           cm->yph, YX, YY, u, v, &prev_DC[0], yhtbl, 0);
-      write_interleaved_data_MCU(cm, cm->curframe->residuals->Udct, cm->upw,
+      write_interleaved_data_MCU(cm, cm->refframe->residuals->Udct, cm->upw,
           cm->uph, UX, UY, u, v, &prev_DC[1], uhtbl, 1);
-      write_interleaved_data_MCU(cm, cm->curframe->residuals->Vdct, cm->vpw,
+      write_interleaved_data_MCU(cm, cm->refframe->residuals->Vdct, cm->vpw,
           cm->vph, VX, VY, u, v, &prev_DC[2], vhtbl, 2);
     }
   }

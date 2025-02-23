@@ -122,6 +122,15 @@ static void c63_encode_image(struct c63_common *cm, yuv_t *image)
 
     /* Motion Compensation */
     c63_motion_compensate(cm);
+
+    write_frame(cm);
+
+    // Ensure predicted is copied back to host before continuing with DCT
+    cudaDeviceSynchronize();
+  }
+  else if (cm->framenum != 0)
+  {
+    write_frame(cm);
   }
 
   /* DCT and Quantization */
@@ -147,8 +156,6 @@ static void c63_encode_image(struct c63_common *cm, yuv_t *image)
 
   /* Function dump_image(), found in common.c, can be used here to check if the
      prediction is correct */
-
-  write_frame(cm);
 
   ++cm->framenum;
   ++cm->frames_since_keyframe;
