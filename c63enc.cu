@@ -286,7 +286,8 @@ int main(int argc, char **argv)
   {
     image = read_yuv(infile, cm);
 
-    if (!image) { break; }
+    // Need to write last frame if end of file
+    if (!image) { write_frame(cm); break; }
 
     printf("Encoding frame %d, ", numframes);
     c63_encode_image(cm, image);
@@ -300,7 +301,8 @@ int main(int argc, char **argv)
 
     ++numframes;
 
-    if (limit_numframes && numframes >= limit_numframes) { break; }
+    // Need to write last frame if reached limit of frames
+    if (limit_numframes && numframes >= limit_numframes) { write_frame(cm); break; }
   }
 
   /* Gentlemen, please clean up all memory used on the GPU */
