@@ -57,7 +57,7 @@ struct frame* create_frame(struct c63_common *cm, yuv_t *image)
 
   f->orig = image;
 
-  // Use pinned memory for reconstructed, as this will be used to encode next frame
+  // Use pinned memory for reconstructed, as this will be used to encode next frame on GPU
   f->recons = (yuv_t*)malloc(sizeof(yuv_t));
   CUDA_CHECK(cudaHostAlloc((void**)&(f->recons->Y), cm->ypw * cm->yph * sizeof(uint8_t), cudaHostAllocDefault));
   CUDA_CHECK(cudaHostAlloc((void**)&(f->recons->U), cm->upw * cm->uph * sizeof(uint8_t), cudaHostAllocDefault));

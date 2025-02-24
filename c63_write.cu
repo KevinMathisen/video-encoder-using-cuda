@@ -344,6 +344,8 @@ static void write_interleaved_data(struct c63_common *cm)
 
 void write_frame(struct c63_common *cm)
 {
+  // NB: Writes cm-refframe, not cm->curframe!
+
   /* Write headers */
 
   /* Start Of Image */

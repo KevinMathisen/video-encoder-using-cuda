@@ -45,21 +45,30 @@ static yuv_t* read_yuv(FILE *file, struct c63_common *cm)
   size_t len = 0;
   yuv_t *image = (yuv_t*)malloc(sizeof(*image));
 
-  /* Read Y. The size of Y is the same as the size of the image. The indices
-     represents the color component (0 is Y, 1 is U, and 2 is V) */
+  
+  // Allocate pinned memory for Y component
   CUDA_CHECK(cudaHostAlloc((void**)&image->Y, 
     cm->padw[Y_COMPONENT]*cm->padh[Y_COMPONENT] * sizeof(uint8_t), cudaHostAllocDefault));
+
+  /* Read Y. The size of Y is the same as the size of the image. The indices
+     represents the color component (0 is Y, 1 is U, and 2 is V) */
   len += fread(image->Y, 1, width*height, file);
+
+
+  // Allocate pinned memory for U component
+  CUDA_CHECK(cudaHostAlloc((void**)&image->U, 
+    cm->padw[U_COMPONENT]*cm->padh[U_COMPONENT] * sizeof(uint8_t), cudaHostAllocDefault));
 
   /* Read U. Given 4:2:0 chroma sub-sampling, the size is 1/4 of Y
      because (height/2)*(width/2) = (height*width)/4. */
-  CUDA_CHECK(cudaHostAlloc((void**)&image->U, 
-    cm->padw[U_COMPONENT]*cm->padh[U_COMPONENT] * sizeof(uint8_t), cudaHostAllocDefault));
   len += fread(image->U, 1, (width*height)/4, file);
 
-  /* Read V. Given 4:2:0 chroma sub-sampling, the size is 1/4 of Y. */
+
+  // Allocate pinned memory for V component
   CUDA_CHECK(cudaHostAlloc((void**)&image->V, 
     cm->padw[V_COMPONENT]*cm->padh[V_COMPONENT] * sizeof(uint8_t), cudaHostAllocDefault));
+
+  /* Read V. Given 4:2:0 chroma sub-sampling, the size is 1/4 of Y. */
   len += fread(image->V, 1, (width*height)/4, file);
 
   if (ferror(file))
@@ -70,6 +79,7 @@ static yuv_t* read_yuv(FILE *file, struct c63_common *cm)
 
   if (feof(file))
   {
+    // Free pinned memory
     CUDA_CHECK(cudaFreeHost(image->Y));
     CUDA_CHECK(cudaFreeHost(image->U));
     CUDA_CHECK(cudaFreeHost(image->V));
@@ -82,6 +92,7 @@ static yuv_t* read_yuv(FILE *file, struct c63_common *cm)
     fprintf(stderr, "Reached end of file, but incorrect bytes read.\n");
     fprintf(stderr, "Wrong input? (height: %d width: %d)\n", height, width);
 
+    // Free pinned memory
     CUDA_CHECK(cudaFreeHost(image->Y));
     CUDA_CHECK(cudaFreeHost(image->U));
     CUDA_CHECK(cudaFreeHost(image->V));
@@ -108,7 +119,8 @@ static void c63_encode_image(struct c63_common *cm, yuv_t *image)
 
     fprintf(stderr, " (keyframe) ");
     
-    // Apparantly memory is not zeroed when using cudaHostAlloc, so manually set it for keyframes
+    // Apparantly memory is not zeroed when using cudaHostAlloc, so manually set it to 0 for keyframes
+    //   (not needed for non-keyframes, as their predicted is set by the GPU)
     memset(cm->curframe->predicted->Y, 0, cm->ypw * cm->yph);
     memset(cm->curframe->predicted->U, 0, cm->upw * cm->uph);
     memset(cm->curframe->predicted->V, 0, cm->vpw * cm->vph);
@@ -123,13 +135,15 @@ static void c63_encode_image(struct c63_common *cm, yuv_t *image)
     /* Motion Compensation */
     c63_motion_compensate(cm);
 
+    // Write previous frame while GPU does Motion Estimation and Motion Compensation
     write_frame(cm);
 
-    // Ensure predicted is copied back to host before continuing with DCT
+    // Ensure motion vectors and predicted is copied back to host before continuing with DCT
     cudaDeviceSynchronize();
   }
   else if (cm->framenum != 0)
   {
+    // Simply write previous frame for keyframes, as it can't be parallelized
     write_frame(cm);
   }
 

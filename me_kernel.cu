@@ -8,9 +8,10 @@
  * Function for calculating sum of absolute difference between 
  * a block in orgin frame and a block in ref frame
  * 
- * @param orig      Pointer to top left corner of 8x8 block in orig
- * @param ref       Pointer to top left corner of 8x8 block in ref
- * @param stride    Width of frame, used for indexing
+ * @param share_orig    Original block to encode
+ * @param share_ref     Reference block to compare and calculcate SAD with
+ * @param ref_x         Start of reference block in x
+ * @param ref_y         Start of reference block in y
  * 
  * @return          Sum of absolute difference between blocks
  */
@@ -59,14 +60,15 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     // Find where orig block starts
     int mx = mb_x * 8, my = mb_y * 8;
 
-    // Allocate shared memory for original 8x8 block and 32x32 reference block
+    // Allocate shared memory for original 8x8 block and 39x39 reference block
+    //   (39x39 as this covers all pixels when search range is 16 and block size 8x8)
     __shared__ uint8_t share_orig[8][8];
     __shared__ uint8_t share_ref[39][39];
 
     // Thread index to identify which candidate
     int tid_x = threadIdx.x, tid_y = threadIdx.y;
 
-    // load original 8x8 block into shared memory
+    // Use 64 threads to load original 8x8 block into shared memory
     if (tid_x < 8 && tid_y < 8)
         share_orig[tid_y][tid_x] = d_orig[(my+tid_y)*w + (mx+tid_x)];
     
@@ -77,13 +79,14 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     // i.e. use the thread index to calculcate where in the search area it is
     int x = search_left + tid_x, y = search_top + tid_y;
 
-    // For each thread: load 32x32 part of reference frame we use to compare into shared memory
+    // For each thread: load main part of reference frame we use to compare into shared memory
+    //  (16 search range -> 32x32, 8 search range -> 16x16)
     if (x >= 0 && x < w && y >= 0 && y < h)
         share_ref[tid_y][tid_x] = d_ref[y*w+x];
     else
         share_ref[tid_y][tid_x] = 0; // Set reference outside of frame to 0
 
-    // For remaning pixels to copy in 39x39 block, load using more threads. 
+    // For remaning pixels to copy in 39x39 block, load using more threads. NB: NEED TO FIX FOR 8 SEARCH RANGE
     if (tid_x < 7 && x + 32 < w) 
         share_ref[tid_y][tid_x + 32] = (y >= 0 && y < h) ? d_ref[y * w + (x + 32)] : 0;
 
@@ -93,7 +96,8 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     if (tid_x < 7 && tid_y < 7 && x + 32 < w && y + 32 < h) 
         share_ref[tid_y + 32][tid_x + 32] = d_ref[(y + 32) * w + (x + 32)];
 
-    __syncthreads(); // ensure orig and ref is in shared memory before continuing
+    /* Ensure orig and ref is in shared memory before continuing */
+    __syncthreads();
 
     int sad_value = INT_MAX;
 
@@ -104,8 +108,8 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
         sad_value = sad_block_8x8_device(share_orig, share_ref, tid_x, tid_y);
     }
 
-    // Next we need to find the lowest sad_value and its offset
-    // Use warp level reduction + atomic min for this 
+    /* Next we need to find the lowest sad_value and its offset 
+        Use warp level reduction for this */
 
     int tid = tid_y * blockDim.x + tid_x;
     int lane = tid%32;      // index of thread in warp
@@ -114,11 +118,13 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     // Calculate motion vector offset for thread/candidate
     int mv_x = x-mx, mv_y = y-my;
 
-    // Find lowest sad for each warp
+    /* Find lowest sad for each warp
+        Do this by doing reduction with shfl_down_sync to end up with  
+        lowest SAD and its offset in lane 0 of each warp */
     for (int offset = 16; offset > 0; offset /= 2) 
     {
         int sad_compare = __shfl_down_sync(0xFFFFFFFF, sad_value, offset);  // (assume 32 lanes in each warp because we 
-        int mv_x_compare = __shfl_down_sync(0xFFFFFFFF, mv_x, offset);      //  have search range 16 so 1024 threads.
+        int mv_x_compare = __shfl_down_sync(0xFFFFFFFF, mv_x, offset);      //  have search range 16/8 -> 1024/256 threads.
         int mv_y_compare = __shfl_down_sync(0xFFFFFFFF, mv_y, offset);      //  could use __activemask() instead of 0xFFFFFFFF)
 
         if (lane < offset && sad_compare < sad_value) 
@@ -129,9 +135,10 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
         }
     }
 
-    __syncthreads(); // Ensure all warps are done finding their best SAD
+    /* Ensure all warps are done finding their best SAD */
+    __syncthreads();
 
-    // Now we need to find best SAD from the remaning ones!
+    /* Now we need to find best SAD from the remaning ones! */
 
     // Find amount of warps
     int num_warps = (blockDim.x*blockDim.y)/32;
@@ -147,11 +154,13 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
         warp_mv_y[warp_id] = mv_y;
     }
         
-    __syncthreads(); // ensure all warps have written their minimum
+    /* Ensure all warps have written their minimum */
+    __syncthreads();
 
-    // Final reduction using only first warp
+    /* Final reduction using only first warp */
     if (warp_id == 0) 
     {
+        // Each thread/lane in first warp will retreive best SAD from each warp
         sad_value = (lane < num_warps) ? warp_sad[lane] : INT_MAX;
         mv_x = (lane < num_warps) ? warp_mv_x[lane] : 0;
         mv_y = (lane < num_warps) ? warp_mv_y[lane] : 0;
@@ -160,7 +169,7 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
         for (int offset = num_warps/2; offset > 0; offset /= 2) 
         {
             int sad_compare = __shfl_down_sync(0xFFFFFFFF, sad_value, offset);  // (assume 32 lanes in each warp because we 
-            int mv_x_compare = __shfl_down_sync(0xFFFFFFFF, mv_x, offset);      //  have search range 16 so 1024 threads.
+            int mv_x_compare = __shfl_down_sync(0xFFFFFFFF, mv_x, offset);      //  have search range 16/8 -> 1024/256 threads.
             int mv_y_compare = __shfl_down_sync(0xFFFFFFFF, mv_y, offset);      //  could use __activemask() instead of 0xFFFFFFFF)
 
             if (lane < offset && sad_compare < sad_value) 
@@ -172,7 +181,7 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
         }
     }
 
-    // thread 0 has the smallest sad, return its offset
+    // Thread 0 has the smallest sad, return its offset
     if (tid == 0)
     {
         struct macroblock *mb = &d_mbs[mb_y*mb_cols + mb_x];

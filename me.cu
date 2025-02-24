@@ -27,7 +27,7 @@
   } while (0)
 
 /* Global Variables */
-int w_y, h_y, w_uv, h_uv;                 // Height and width
+int w_y, h_y, w_uv, h_uv;                         // Height and width of frames in pixels
 int mb_cols_y, mb_rows_y, mb_cols_uv, mb_rows_uv; // Columns and rows
 int mem_size_y, mem_size_uv, mem_size_mbs_y, mem_size_mbs_uv;
 int range;
@@ -93,7 +93,7 @@ __host__ void gpu_init(struct c63_common *cm)
 
 __host__ void gpu_cleanup()
 {
-  // Free all memory used on the GPu
+  // Free all memory used on the GPU
   CUDA_CHECK(cudaFree(d_in_org_Y));
   CUDA_CHECK(cudaFree(d_in_org_U));
   CUDA_CHECK(cudaFree(d_in_org_V));
@@ -119,7 +119,7 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
 {
   /* Compare this frame with previous reconstructed frame */
   
-  // Copy data to device
+  // Copy data to device (frame to encode and reference frame's reconstruction)
   CUDA_CHECK(cudaMemcpyAsync(d_in_org_Y, cm->curframe->orig->Y, mem_size_y, cudaMemcpyHostToDevice, stream[0]));
   CUDA_CHECK(cudaMemcpyAsync(d_in_ref_Y, cm->refframe->recons->Y, mem_size_y, cudaMemcpyHostToDevice, stream[0]));
   CUDA_CHECK(cudaMemcpyAsync(d_in_org_U, cm->curframe->orig->U, mem_size_uv, cudaMemcpyHostToDevice, stream[1]));
@@ -132,7 +132,7 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
   dim3 block_grid_y(mb_cols_y, mb_rows_y, 1);
   dim3 block_grid_uv(mb_cols_uv, mb_rows_uv, 1);
 
-  // Threads correspond to each candidate reference
+  // Threads correspond to each candidate in search range
   dim3 thread_grid_y(2*range, 2*range, 1);
   dim3 thread_grid_uv(range, range, 1);
   
@@ -142,38 +142,29 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
 
   cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
-    fprintf(stderr, "Kernel 1 launch error: %s\n", cudaGetErrorString(err));
+    fprintf(stderr, "Kernel Motion Estimation launch error: %s\n", cudaGetErrorString(err));
     exit(1);
   }
 
   // Copy motion vectors back to host
-  CUDA_CHECK(cudaMemcpyAsync(cm->curframe->mbs[Y_COMPONENT], d_mbs_Y, mem_size_mbs_y, cudaMemcpyDeviceToHost, stream[0]));
+  CUDA_CHECK(cudaMemcpyAsync(
+    cm->curframe->mbs[Y_COMPONENT], d_mbs_Y, mem_size_mbs_y, cudaMemcpyDeviceToHost, stream[0]));
 
   /* Motion estimation for Chroma (U) */
   me_kernel<<<block_grid_uv, thread_grid_uv, 0, stream[1]>>>(
     d_in_org_U, d_in_ref_U, d_mbs_U, range/2, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
-  err = cudaGetLastError();
-  if (err != cudaSuccess) {
-    fprintf(stderr, "Kernel 2 launch error: %s\n", cudaGetErrorString(err));
-    exit(1);
-  }
-
   // Copy motion vectors back to host
-  CUDA_CHECK(cudaMemcpyAsync(cm->curframe->mbs[U_COMPONENT], d_mbs_U, mem_size_mbs_uv, cudaMemcpyDeviceToHost, stream[1]));
+  CUDA_CHECK(cudaMemcpyAsync(
+    cm->curframe->mbs[U_COMPONENT], d_mbs_U, mem_size_mbs_uv, cudaMemcpyDeviceToHost, stream[1]));
 
   /* Motion estimation for Chroma (V) */
   me_kernel<<<block_grid_uv, thread_grid_uv, 0, stream[2]>>>(
     d_in_org_V, d_in_ref_V, d_mbs_V, range/2, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
-  err = cudaGetLastError();
-  if (err != cudaSuccess) {
-    fprintf(stderr, "Kernel 3 launch error: %s\n", cudaGetErrorString(err));
-    exit(1);
-  }
-
   // Copy motion vectors back to host
-  CUDA_CHECK(cudaMemcpyAsync(cm->curframe->mbs[V_COMPONENT], d_mbs_V, mem_size_mbs_uv, cudaMemcpyDeviceToHost, stream[2]));
+  CUDA_CHECK(cudaMemcpyAsync(
+    cm->curframe->mbs[V_COMPONENT], d_mbs_V, mem_size_mbs_uv, cudaMemcpyDeviceToHost, stream[2]));
 
 }
 
@@ -193,7 +184,7 @@ void c63_motion_compensate(struct c63_common *cm)
 
   cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
-    fprintf(stderr, "Kernel 4 launch error: %s\n", cudaGetErrorString(err));
+    fprintf(stderr, "Kernel Motion Compensation launch error: %s\n", cudaGetErrorString(err));
     exit(1);
   }
 
@@ -204,24 +195,12 @@ void c63_motion_compensate(struct c63_common *cm)
   mc_kernel<<<block_grid_uv, thread_grid, 0, stream[1]>>>(
     d_out_U, d_in_ref_U, d_mbs_U, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
 
-  err = cudaGetLastError();
-  if (err != cudaSuccess) {
-    fprintf(stderr, "Kernel 5 launch error: %s\n", cudaGetErrorString(err));
-    exit(1);
-  }
-
   // Copy results back to host
   CUDA_CHECK(cudaMemcpyAsync(cm->curframe->predicted->U, d_out_U, mem_size_uv, cudaMemcpyDeviceToHost, stream[1]));
 
   /* Motion estimation for Chroma (V) */
   mc_kernel<<<block_grid_uv, thread_grid, 0, stream[2]>>>(
     d_out_V, d_in_ref_V, d_mbs_V, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
-
-  err = cudaGetLastError();
-  if (err != cudaSuccess) {
-    fprintf(stderr, "Kernel 6 launch error: %s\n", cudaGetErrorString(err));
-    exit(1);
-  }
 
   // Copy results back to host
   CUDA_CHECK(cudaMemcpyAsync(cm->curframe->predicted->V, d_out_V, mem_size_uv, cudaMemcpyDeviceToHost, stream[2]));
