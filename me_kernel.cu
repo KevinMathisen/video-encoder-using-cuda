@@ -16,7 +16,7 @@
  * @return          Sum of absolute difference between blocks
  */
 __device__ __forceinline__ int sad_block_8x8_device(const uint8_t share_orig[8][8], 
-    const uint8_t share_ref[39][39], int ref_x, int ref_y)
+    const uint8_t share_ref[40][40], int ref_x, int ref_y)
 {
     int u, v;
     int result = 0;
@@ -60,10 +60,11 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     // Find where orig block starts
     int mx = mb_x * 8, my = mb_y * 8;
 
-    // Allocate shared memory for original 8x8 block and 39x39 reference block
-    //   (39x39 as this covers all pixels when search range is 16 and block size 8x8)
+    // Allocate shared memory for original 8x8 block and 40x40 reference block
+    //   (40x40 as this covers all pixels when search range is 16 and block size 8x8)
+    //   (aka (16x2+8)x(16x2+8), results in 24x24 for search range 8 )
     __shared__ uint8_t share_orig[8][8];
-    __shared__ uint8_t share_ref[39][39];
+    __shared__ uint8_t share_ref[40][40];
 
     // Thread index to identify which candidate
     int tid_x = threadIdx.x, tid_y = threadIdx.y;
@@ -86,15 +87,20 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     else
         share_ref[tid_y][tid_x] = 0; // Set reference outside of frame to 0
 
-    // For remaning pixels to copy in 39x39 block, load using more threads. NB: NEED TO FIX FOR 8 SEARCH RANGE
-    if (tid_x < 7 && x + 32 < w) 
-        share_ref[tid_y][tid_x + 32] = (y >= 0 && y < h) ? d_ref[y * w + (x + 32)] : 0;
+    int main_ref_edge = range*2;
 
-    if (tid_y < 7 && y + 32 < h) 
-        share_ref[tid_y + 32][tid_x] = (x >= 0 && x < w) ? d_ref[(y + 32) * w + x] : 0;
+    /* Load "edge" of the reference frame, where the width of it is always 7 (as block size is 8x8)
+           Results in filling 40x40 for search range 16, and 24x24 for search range 8 */
 
-    if (tid_x < 7 && tid_y < 7 && x + 32 < w && y + 32 < h) 
-        share_ref[tid_y + 32][tid_x + 32] = d_ref[(y + 32) * w + (x + 32)];
+    // Load "right" edge
+    if (tid_x < 7 && x + main_ref_edge < w) 
+        share_ref[tid_y][tid_x + main_ref_edge] = (y >= 0 && y < h) ? d_ref[y*w + (x+main_ref_edge)] : 0;
+    // Load "bottom" edge
+    if (tid_y < 7 && y + main_ref_edge < h) 
+        share_ref[tid_y + main_ref_edge][tid_x] = (x >= 0 && x < w) ? d_ref[(y+main_ref_edge)*w + x] : 0;
+    // Load "right-bottom" corner
+    if (tid_x < 7 && tid_y < 7 && x + main_ref_edge < w && y + main_ref_edge < h) 
+        share_ref[tid_y + main_ref_edge][tid_x + main_ref_edge] = d_ref[(y+main_ref_edge)*w + (x+main_ref_edge)];
 
     /* Ensure orig and ref is in shared memory before continuing */
     __syncthreads();
