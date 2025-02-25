@@ -1,41 +1,39 @@
 # Codec63 #
 
-The repository contains code for both native C code that is meant for compilation with GCC,
-and native CUDA code that is meant for compilation with NVCC. Choose the subdirectory 
-c63-in-c for the first and c63-in-cuda for the second.
+**NB: When running cmake on the in5050 servers, include the flag** `-DCMAKE_CUDA_FLAGS="-gencode arch=compute_50,code=sm_50"`
 
-The code is actually the same at this point (C++ is pretty much a superset of C,
-and CUDA a superset of C++), only the filenames are different for convenience.
+The repository contains native CUDA code that is meant for compilation with NVCC. 
+The program can be used to encode a `.yuv` file using motion estimation, motion compensation, DCT, and quantization. 
+Currently only motion estimation and motion compensation is offloaded to the GPU.
 
-After changing either to c63-in-c or to c63-in-cuda, you do the following:
-
-To build:
+### Build
+To build (ignore the flag for cmake when compiling for GPU with compute version != 5.0):
 ```
 mkdir build
 cd build
-cmake ..
+cmake -DCMAKE_CUDA_FLAGS="-gencode arch=compute_50,code=sm_50" ..
 make
 ```
 
+### Run
 To encode a video:
 ```
 ./c63enc -w 352 -h 288 -f 10 -o foremanout.c63 foreman.yuv
 ```
 
-We strongly recommend that clone the github repository in5050-codec63 twice.
-Make your change in one of them, but use the c53dec and c63pred command from your
-_other_ checkout. The reason is that nearly all files are shared between encoding
-and decoding.
-
-To decode the c63 file:
+To decode the c63 file (should be done from another resitory without modifications):
 ```
 ./c63dec foremanout.c63 output.yuv
 ```
 
-Tip! Use mplayer or ffplay to playback raw YUV file:
+To get the prediction buffer (which can also be played using mplayer):
+```
+./c63pred foremanout.c63 predictionbuffer.yuv
+```
+
+Use mplayer or ffplay to playback raw YUV file:
 ```
 mplayer -demuxer rawvideo -rawvideo w=352:h=288 output.yuv
-ffplay -f rawvideo -pixel_format yuv420p -video_size 352x288 -i output.yuv
 ```
 
 
