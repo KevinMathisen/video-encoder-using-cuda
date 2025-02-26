@@ -15,6 +15,8 @@
 #include "me.h"
 #include "tables.h"
 
+cudaStream_t stream[3]
+
 /* Decode VLC token */
 static uint8_t get_vlc_token(struct entropy_ctx *c, uint16_t *table,
     uint8_t *table_sz, int tablelen)
@@ -407,7 +409,7 @@ int parse_c63_frame(struct c63_common *cm)
 void decode_c63_frame(struct c63_common *cm, FILE *fout)
 {
   /* Motion Compensation */
-  if (!cm->curframe->keyframe) { c63_motion_compensate(cm); }
+  if (!cm->curframe->keyframe) { c63_motion_compensate(cm, stream); }
 
   /* Decode residuals */
   dequantize_idct(cm->curframe->residuals->Ydct, cm->curframe->predicted->Y,
