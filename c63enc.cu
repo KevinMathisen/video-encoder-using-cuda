@@ -135,7 +135,7 @@ static void c63_encode_image(struct c63_common *cm, yuv_t *image)
     c63_motion_estimate(cm, stream);
 
     /* Motion Compensation */
-    c63_motion_compensate(cm, stream);
+    // c63_motion_compensate(cm, stream);
 
     // Write previous frame while GPU does Motion Estimation and Motion Compensation for Y
     write_frame(cm);

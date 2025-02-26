@@ -116,16 +116,8 @@ __host__ void gpu_cleanup(cudaStream_t stream[3])
 __host__ void c63_motion_estimate(struct c63_common *cm, cudaStream_t stream[3])
 {
   /* Compare this frame with previous reconstructed frame */
-  
-  // Copy data to device (frame to encode and reference frame's reconstruction)
-  CUDA_CHECK(cudaMemcpyAsync(d_in_org_Y, cm->curframe->orig->Y, mem_size_y, cudaMemcpyHostToDevice, stream[0]));
-  CUDA_CHECK(cudaMemcpyAsync(d_in_ref_Y, cm->refframe->recons->Y, mem_size_y, cudaMemcpyHostToDevice, stream[0]));
-  CUDA_CHECK(cudaMemcpyAsync(d_in_org_U, cm->curframe->orig->U, mem_size_uv, cudaMemcpyHostToDevice, stream[1]));
-  CUDA_CHECK(cudaMemcpyAsync(d_in_ref_U, cm->refframe->recons->U, mem_size_uv, cudaMemcpyHostToDevice, stream[1]));
-  CUDA_CHECK(cudaMemcpyAsync(d_in_org_V, cm->curframe->orig->V, mem_size_uv, cudaMemcpyHostToDevice, stream[2]));
-  CUDA_CHECK(cudaMemcpyAsync(d_in_ref_V, cm->refframe->recons->V, mem_size_uv, cudaMemcpyHostToDevice, stream[2]));
-  
-  /* Set dimentions for grid and blocks */
+
+  /* Set dimentions for grid and blocks ME */
   // Blocks correspond to macroblocks in frame
   dim3 block_grid_y(mb_cols_y, mb_rows_y, 1);
   dim3 block_grid_uv(mb_cols_uv, mb_rows_uv, 1);
@@ -133,7 +125,19 @@ __host__ void c63_motion_estimate(struct c63_common *cm, cudaStream_t stream[3])
   // Threads correspond to each candidate in search range
   dim3 thread_grid_y(2*range, 2*range, 1);
   dim3 thread_grid_uv(range, range, 1);
+
+  /* Set dimentions for grid and blocks MC */
+  // Each block correspond to one macroblock
+  dim3 block_grid_y_mc(mb_cols_y, mb_rows_y);
+  dim3 block_grid_uv_mc(mb_cols_uv, mb_rows_uv);
+
+  // Each thread correspond to one pixel in each block
+  dim3 thread_grid_mc(8, 8);
   
+  // Copy data to device (frame to encode and reference frame's reconstruction)
+  CUDA_CHECK(cudaMemcpyAsync(d_in_org_Y, cm->curframe->orig->Y, mem_size_y, cudaMemcpyHostToDevice, stream[0]));
+  CUDA_CHECK(cudaMemcpyAsync(d_in_ref_Y, cm->refframe->recons->Y, mem_size_y, cudaMemcpyHostToDevice, stream[0]));
+
   /* Motion estimation for Luma (Y) */
   me_kernel<<<block_grid_y, thread_grid_y, 0, stream[0]>>>(
     d_in_org_Y, d_in_ref_Y, d_mbs_Y, range, w_y, h_y, mb_cols_y, mb_rows_y);
@@ -148,6 +152,17 @@ __host__ void c63_motion_estimate(struct c63_common *cm, cudaStream_t stream[3])
   CUDA_CHECK(cudaMemcpyAsync(
     cm->curframe->mbs[Y_COMPONENT], d_mbs_Y, mem_size_mbs_y, cudaMemcpyDeviceToHost, stream[0]));
 
+  /* Motion compensation for Luma (Y) */
+  mc_kernel<<<block_grid_y_mc, thread_grid_mc, 0, stream[0]>>>(
+    d_out_Y, d_in_ref_Y, d_mbs_Y, w_y, h_y, mb_cols_y, mb_rows_y);
+
+  // Copy results back to host
+  CUDA_CHECK(cudaMemcpyAsync(cm->curframe->predicted->Y, d_out_Y, mem_size_y, cudaMemcpyDeviceToHost, stream[0]));
+
+
+  CUDA_CHECK(cudaMemcpyAsync(d_in_org_U, cm->curframe->orig->U, mem_size_uv, cudaMemcpyHostToDevice, stream[1]));
+  CUDA_CHECK(cudaMemcpyAsync(d_in_ref_U, cm->refframe->recons->U, mem_size_uv, cudaMemcpyHostToDevice, stream[1]));
+
   /* Motion estimation for Chroma (U) */
   me_kernel<<<block_grid_uv, thread_grid_uv, 0, stream[1]>>>(
     d_in_org_U, d_in_ref_U, d_mbs_U, range/2, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
@@ -155,6 +170,17 @@ __host__ void c63_motion_estimate(struct c63_common *cm, cudaStream_t stream[3])
   // Copy motion vectors back to host
   CUDA_CHECK(cudaMemcpyAsync(
     cm->curframe->mbs[U_COMPONENT], d_mbs_U, mem_size_mbs_uv, cudaMemcpyDeviceToHost, stream[1]));
+
+  /* Motion estimation for Chroma (U) */
+  mc_kernel<<<block_grid_uv_mc, thread_grid_mc, 0, stream[1]>>>(
+    d_out_U, d_in_ref_U, d_mbs_U, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
+
+  // Copy results back to host
+  CUDA_CHECK(cudaMemcpyAsync(cm->curframe->predicted->U, d_out_U, mem_size_uv, cudaMemcpyDeviceToHost, stream[1]));
+
+
+  CUDA_CHECK(cudaMemcpyAsync(d_in_org_V, cm->curframe->orig->V, mem_size_uv, cudaMemcpyHostToDevice, stream[2]));
+  CUDA_CHECK(cudaMemcpyAsync(d_in_ref_V, cm->refframe->recons->V, mem_size_uv, cudaMemcpyHostToDevice, stream[2]));
 
   /* Motion estimation for Chroma (V) */
   me_kernel<<<block_grid_uv, thread_grid_uv, 0, stream[2]>>>(
@@ -164,42 +190,23 @@ __host__ void c63_motion_estimate(struct c63_common *cm, cudaStream_t stream[3])
   CUDA_CHECK(cudaMemcpyAsync(
     cm->curframe->mbs[V_COMPONENT], d_mbs_V, mem_size_mbs_uv, cudaMemcpyDeviceToHost, stream[2]));
 
+  /* Motion estimation for Chroma (V) */
+  mc_kernel<<<block_grid_uv_mc, thread_grid_mc, 0, stream[2]>>>(
+    d_out_V, d_in_ref_V, d_mbs_V, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
+
+  // Copy results back to host
+  CUDA_CHECK(cudaMemcpyAsync(cm->curframe->predicted->V, d_out_V, mem_size_uv, cudaMemcpyDeviceToHost, stream[2]));
+
 }
 
 void c63_motion_compensate(struct c63_common *cm, cudaStream_t stream[3])
 {
-  /* Set dimentions for grid and blocks */
-  // Each block correspond to one macroblock
-  dim3 block_grid_y(mb_cols_y, mb_rows_y);
-  dim3 block_grid_uv(mb_cols_uv, mb_rows_uv);
 
-  // Each thread correspond to one pixel in each block
-  dim3 thread_grid(8, 8);
-
-  /* Motion compensation for Luma (Y) */
-  mc_kernel<<<block_grid_y, thread_grid, 0, stream[0]>>>(
-    d_out_Y, d_in_ref_Y, d_mbs_Y, w_y, h_y, mb_cols_y, mb_rows_y);
+  return;
 
   cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
     fprintf(stderr, "Kernel Motion Compensation launch error: %s\n", cudaGetErrorString(err));
     exit(1);
   }
-
-  // Copy results back to host
-  CUDA_CHECK(cudaMemcpyAsync(cm->curframe->predicted->Y, d_out_Y, mem_size_y, cudaMemcpyDeviceToHost, stream[0]));
-
-  /* Motion estimation for Chroma (U) */
-  mc_kernel<<<block_grid_uv, thread_grid, 0, stream[1]>>>(
-    d_out_U, d_in_ref_U, d_mbs_U, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
-
-  // Copy results back to host
-  CUDA_CHECK(cudaMemcpyAsync(cm->curframe->predicted->U, d_out_U, mem_size_uv, cudaMemcpyDeviceToHost, stream[1]));
-
-  /* Motion estimation for Chroma (V) */
-  mc_kernel<<<block_grid_uv, thread_grid, 0, stream[2]>>>(
-    d_out_V, d_in_ref_V, d_mbs_V, w_uv, h_uv, mb_cols_uv, mb_rows_uv);
-
-  // Copy results back to host
-  CUDA_CHECK(cudaMemcpyAsync(cm->curframe->predicted->V, d_out_V, mem_size_uv, cudaMemcpyDeviceToHost, stream[2]));
 }
