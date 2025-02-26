@@ -27,6 +27,8 @@
     }                                                                      \
   } while (0)
 
+static cudaStream_t stream[3]; // Cuda streams used in me.cu
+
 static char *output_file, *input_file;
 FILE *outfile;
 
@@ -130,16 +132,16 @@ static void c63_encode_image(struct c63_common *cm, yuv_t *image)
   if (!cm->curframe->keyframe)
   {
     /* Motion Estimation */
-    c63_motion_estimate(cm);
+    c63_motion_estimate(cm, stream);
 
     /* Motion Compensation */
-    c63_motion_compensate(cm);
+    c63_motion_compensate(cm, stream);
 
-    // Write previous frame while GPU does Motion Estimation and Motion Compensation
+    // Write previous frame while GPU does Motion Estimation and Motion Compensation for Y
     write_frame(cm);
 
-    // Ensure motion vectors and predicted is copied back to host before continuing with DCT
-    cudaDeviceSynchronize();
+    // Ensure motion vectors and predicted for Y is copied back to host before continuing with DCT
+    cudaStreamSynchronize(stream[0]);
   }
   else if (cm->framenum != 0)
   {
@@ -151,20 +153,27 @@ static void c63_encode_image(struct c63_common *cm, yuv_t *image)
   dct_quantize(image->Y, cm->curframe->predicted->Y, cm->padw[Y_COMPONENT],
       cm->padh[Y_COMPONENT], cm->curframe->residuals->Ydct,
       cm->quanttbl[Y_COMPONENT]);
+  /* Reconstruct frame for inter-prediction */
+  dequantize_idct(cm->curframe->residuals->Ydct, cm->curframe->predicted->Y,
+      cm->ypw, cm->yph, cm->curframe->recons->Y, cm->quanttbl[Y_COMPONENT]);
+
+  // Ensure motion vectors and predicted for U is copied back to host 
+  if (!cm->curframe->keyframe) cudaStreamSynchronize(stream[1]);
 
   dct_quantize(image->U, cm->curframe->predicted->U, cm->padw[U_COMPONENT],
       cm->padh[U_COMPONENT], cm->curframe->residuals->Udct,
       cm->quanttbl[U_COMPONENT]);
 
+  dequantize_idct(cm->curframe->residuals->Udct, cm->curframe->predicted->U,
+      cm->upw, cm->uph, cm->curframe->recons->U, cm->quanttbl[U_COMPONENT]);
+
+  // Ensure motion vectors and predicted for V is copied back to host
+  if (!cm->curframe->keyframe) cudaStreamSynchronize(stream[2]);
+
   dct_quantize(image->V, cm->curframe->predicted->V, cm->padw[V_COMPONENT],
       cm->padh[V_COMPONENT], cm->curframe->residuals->Vdct,
       cm->quanttbl[V_COMPONENT]);
 
-  /* Reconstruct frame for inter-prediction */
-  dequantize_idct(cm->curframe->residuals->Ydct, cm->curframe->predicted->Y,
-      cm->ypw, cm->yph, cm->curframe->recons->Y, cm->quanttbl[Y_COMPONENT]);
-  dequantize_idct(cm->curframe->residuals->Udct, cm->curframe->predicted->U,
-      cm->upw, cm->uph, cm->curframe->recons->U, cm->quanttbl[U_COMPONENT]);
   dequantize_idct(cm->curframe->residuals->Vdct, cm->curframe->predicted->V,
       cm->vpw, cm->vph, cm->curframe->recons->V, cm->quanttbl[V_COMPONENT]);
 
@@ -294,7 +303,7 @@ int main(int argc, char **argv)
   int numframes = 0;
 
   /* INIT GPU - Gentlemen, please start you multiprocessors */
-  gpu_init(cm);
+  gpu_init(cm, stream);
 
   while (1)
   {
@@ -320,7 +329,7 @@ int main(int argc, char **argv)
   }
 
   /* Gentlemen, please clean up all memory used on the GPU */
-  gpu_cleanup();
+  gpu_cleanup(stream);
 
   free_c63_enc(cm);
   fclose(outfile);

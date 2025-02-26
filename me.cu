@@ -43,9 +43,7 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows);
 extern __global__ void mc_kernel(uint8_t *d_out, const uint8_t *d_ref,
 const struct macroblock *d_mbs, int w, int h, int mb_cols, int mb_rows);
 
-static cudaStream_t stream[3];
-
-__host__ void gpu_init(struct c63_common *cm)
+__host__ void gpu_init(struct c63_common *cm, cudaStream_t stream[3])
 {
   // Set the height and width of the frame components
   w_y = cm->padw[Y_COMPONENT];
@@ -91,7 +89,7 @@ __host__ void gpu_init(struct c63_common *cm)
     CUDA_CHECK(cudaStreamCreate(&stream[i]));
 }
 
-__host__ void gpu_cleanup()
+__host__ void gpu_cleanup(cudaStream_t stream[3])
 {
   // Free all memory used on the GPU
   CUDA_CHECK(cudaFree(d_in_org_Y));
@@ -115,7 +113,7 @@ __host__ void gpu_cleanup()
     CUDA_CHECK(cudaStreamDestroy(stream[i]));
 }
 
-__host__ void c63_motion_estimate(struct c63_common *cm)
+__host__ void c63_motion_estimate(struct c63_common *cm, cudaStream_t stream[3])
 {
   /* Compare this frame with previous reconstructed frame */
   
@@ -168,7 +166,7 @@ __host__ void c63_motion_estimate(struct c63_common *cm)
 
 }
 
-void c63_motion_compensate(struct c63_common *cm)
+void c63_motion_compensate(struct c63_common *cm, cudaStream_t stream[3])
 {
   /* Set dimentions for grid and blocks */
   // Each block correspond to one macroblock
