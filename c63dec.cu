@@ -15,7 +15,7 @@
 #include "me.h"
 #include "tables.h"
 
-cudaStream_t stream[3]
+cudaStream_t stream[3];
 
 /* Decode VLC token */
 static uint8_t get_vlc_token(struct entropy_ctx *c, uint16_t *table,
