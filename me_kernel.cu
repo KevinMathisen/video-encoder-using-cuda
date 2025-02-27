@@ -15,8 +15,8 @@
  * 
  * @return          Sum of absolute difference between blocks
  */
-__device__ __forceinline__ int sad_block_8x8_device(const uint8_t share_orig[8][8], 
-    const uint8_t share_ref[40][40], int ref_x, int ref_y)
+__device__ __forceinline__ int sad_block_8x8_device(const int share_orig[8][8], 
+    const int share_ref[40][40], int ref_x, int ref_y)
 {
     int u, v;
     int result = 0;
@@ -63,8 +63,8 @@ struct macroblock *d_mbs, int range, int w, int h, int mb_cols, int mb_rows)
     /* Allocate shared memory for original 8x8 block and 40x40 reference block
          (40x40 as this covers all pixels when search range is 16 and block size 8x8)
          (aka (16x2+8)x(16x2+8), results in 24x24 for search range 8 ) */
-    __shared__ uint8_t share_orig[8][8];
-    __shared__ uint8_t share_ref[40][40];
+    __shared__ int share_orig[8][8];
+    __shared__ int share_ref[40][40];
 
     // Thread index to identify which candidate
     int tid_x = threadIdx.x, tid_y = threadIdx.y;
