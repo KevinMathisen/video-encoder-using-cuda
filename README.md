@@ -1,4 +1,4 @@
-# Codec63
+# Video Encoder using CUDA
 
 **NB: When running cmake on server with GPU with compute capability 5.0”, include the flag** `-DCMAKE_CUDA_FLAGS="-gencode arch=compute_50,code=sm_50"`
 
@@ -35,3 +35,4 @@ Use mplayer or ffplay to playback raw YUV file:
 ```
 mplayer -demuxer rawvideo -rawvideo w=352:h=288 output.yuv
 ```
+
